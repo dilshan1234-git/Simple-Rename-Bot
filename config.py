@@ -14,4 +14,4 @@ VID_TRIMMER_URL = "https://envs.sh/qNI.jpg"
 
 # for thumbnail ( back end is MrMKN brain 😉)
 DOWNLOAD_LOCATION = "./DOWNLOADS"
-START_IMAGE_URL = "https://te.legra.ph/file/bce41bc329362c454abed.jpg"
+START_IMAGE_URL = "https://envs.sh/klj.jpg"
