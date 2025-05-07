@@ -149,28 +149,29 @@ async def yt_callback_handler(bot, query):
         
     }
 
-    try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
+try:
+    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(url, download=True)
 
-             # Clean the title
-             original_title = info_dict.get("title", "video")
-             cleaned_title = original_title.replace("|", "").strip()
+        # Clean the title
+        original_title = info_dict.get("title", "video")
+        cleaned_title = original_title.replace("|", "").strip()
 
-             # Keep only safe characters and allow () in filename
-             safe_title = "".join(c for c in cleaned_title if c.isalnum() or c in " ._()-").strip()
+        # Keep only safe characters and allow () in filename
+        safe_title = "".join(c for c in cleaned_title if c.isalnum() or c in " ._()-").strip()
 
-             # Build safe output path
-             ext = info_dict.get("ext", "mp4")
-             unsafe_path = ydl.prepare_filename(info_dict)
-             downloaded_path = os.path.join(DOWNLOAD_LOCATION, f"{safe_title}.{ext}")
+        # Build safe output path
+        ext = info_dict.get("ext", "mp4")
+        unsafe_path = ydl.prepare_filename(info_dict)
+        downloaded_path = os.path.join(DOWNLOAD_LOCATION, f"{safe_title}.{ext}")
 
-            # Rename the downloaded file to the cleaned name
-            os.rename(unsafe_path, downloaded_path)
-        
-    except Exception as e:
-        await download_message.edit_text(f"❌ **Error during download:** {e}")
-        return
+        # Rename the downloaded file to the cleaned name
+        os.rename(unsafe_path, downloaded_path)
+
+except Exception as e:
+    await download_message.edit_text(f"❌ **Error during download:** {e}")
+    return
+
 
     final_filesize = os.path.getsize(downloaded_path)
     video = VideoFileClip(downloaded_path)
