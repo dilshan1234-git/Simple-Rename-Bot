@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -131,31 +132,53 @@ async def yt_callback_handler(bot, query):
     resolution = data[2]
     url = query.data.split('_', 3)[3]
 
-    # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    # Send initial message
+    progress_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+    )
 
-    
+    # Hook function to update message
+    def progress_hook(d):
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', '').strip()
+            speed = d.get('_speed_str', '').strip()
+            eta = d.get('_eta_str', '').strip()
+            text = (
+                f"📥 **Downloading...**\n\n"
+                f"**🎞 {title}**\n"
+                f"**📹 {resolution}**\n\n"
+                f"🔄 **Progress:** `{percent}`\n"
+                f"⚡ **Speed:** `{speed}`\n"
+                f"⏳ **ETA:** `{eta}`"
+            )
+            try:
+                # Use asyncio to safely update inside the hook
+                import asyncio
+                asyncio.run_coroutine_threadsafe(progress_message.edit_text(text), bot.loop)
+            except Exception:
+                pass
+
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
+        'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }]
-        
+        }],
+        'progress_hooks': [progress_hook],
+        'quiet': True,
+        'noplaylist': True
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
-        
     except Exception as e:
-        await download_message.edit_text(f"❌ **Error during download:** {e}")
+        await progress_message.edit_text(f"❌ **Error during download:** `{str(e)}`")
         return
 
     final_filesize = os.path.getsize(downloaded_path)
