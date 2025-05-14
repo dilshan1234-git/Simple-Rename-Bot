@@ -134,49 +134,49 @@ async def yt_callback_handler(bot, query):
 
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial message
-    progress_message = await query.message.edit_text(
-        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
-    )
+    message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
 
-    # Hook function to update message
+    progress = {'last_update': 0}
+
     def progress_hook(d):
         if d['status'] == 'downloading':
             percent = d.get('_percent_str', '').strip()
             speed = d.get('_speed_str', '').strip()
-            eta = d.get('_eta_str', '').strip()
-            text = (
-                f"📥 **Downloading...**\n\n"
-                f"**🎞 {title}**\n"
-                f"**📹 {resolution}**\n\n"
-                f"🔄 **Progress:** `{percent}`\n"
-                f"⚡ **Speed:** `{speed}`\n"
-                f"⏳ **ETA:** `{eta}`"
-            )
-            try:
-                # Use asyncio to safely update inside the hook
-                import asyncio
-                asyncio.run_coroutine_threadsafe(progress_message.edit_text(text), bot.loop)
-            except Exception:
-                pass
+            eta = d.get('eta', 0)
+            now = time.time()
+            # Update only every 5 seconds to avoid flooding
+            if now - progress['last_update'] > 5:
+                asyncio.run_coroutine_threadsafe(
+                    message.edit_text(
+                        f"📥 **Downloading...**\n\n"
+                        f"**🎞 {title}**\n"
+                        f"**📹 {resolution}**\n\n"
+                        f"⬇️ Progress: `{percent}`\n"
+                        f"⚡️ Speed: `{speed}`\n"
+                        f"⏳ ETA: `{eta}` seconds"
+                    ),
+                    bot.loop
+                )
+                progress['last_update'] = now
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
+        'progress_hooks': [progress_hook],
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }],
-        'progress_hooks': [progress_hook],
         'quiet': True,
-        'noplaylist': True
+        'no_warnings': True,
     }
 
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            downloaded_path = ydl.prepare_filename(info_dict)
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            downloaded_path = ydl.prepare_filename(info)
+
     except Exception as e:
         await progress_message.edit_text(f"❌ **Error during download:** `{str(e)}`")
         return
