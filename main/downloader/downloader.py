@@ -9,6 +9,14 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
+from asyncio import Lock, sleep
+from collections import deque
+
+# Global queue and lock for download synchronization
+download_queue = deque()
+is_downloading = False
+queue_lock = Lock()
+MAX_QUEUE = 15
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -124,38 +132,89 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
+    global is_downloading
+
     data = query.data.split('_')
     format_id = data[1]
     resolution = data[2]
     url = query.data.split('_', 3)[3]
 
-    # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
+    chat_id = query.message.chat.id
+    message_id = query.message.message_id
 
-    # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    task = {
+        'bot': bot,
+        'query': query,
+        'chat_id': chat_id,
+        'message_id': message_id,
+        'title': title,
+        'format_id': format_id,
+        'resolution': resolution,
+        'url': url
+    }
 
-    
+    async with queue_lock:
+        if len(download_queue) >= MAX_QUEUE:
+            await query.answer("❌ Download queue is full (max 15). Please try again later.", show_alert=True)
+            return
+
+        download_queue.append(task)
+        if is_downloading:
+            await query.message.edit_text(f"⏳ **Download queued...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+        else:
+            await process_next_in_queue()
+
+
+async def process_next_in_queue():
+    global is_downloading
+
+    async with queue_lock:
+        if not download_queue:
+            is_downloading = False
+            return
+        is_downloading = True
+        task = download_queue.popleft()
+
+    bot = task['bot']
+    query = task['query']
+    title = task['title']
+    resolution = task['resolution']
+    format_id = task['format_id']
+    url = task['url']
+    chat_id = task['chat_id']
+    message_id = task['message_id']
+
+    # Update message to show download started
+    try:
+        download_message = await bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+        )
+    except:
+        download_message = await bot.send_message(chat_id, f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
+        'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }]
-        
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
-        
     except Exception as e:
         await download_message.edit_text(f"❌ **Error during download:** {e}")
+        await process_next_in_queue()
         return
 
     final_filesize = os.path.getsize(downloaded_path)
@@ -166,35 +225,35 @@ async def yt_callback_handler(bot, query):
 
     thumb_url = info_dict.get('thumbnail', None)
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-    response = requests.get(thumb_url)
-    if response.status_code == 200:
-        with open(thumb_path, 'wb') as thumb_file:
-            thumb_file.write(response.content)
+    try:
+        response = requests.get(thumb_url)
+        if response.status_code == 200:
+            with open(thumb_path, 'wb') as thumb_file:
+                thumb_file.write(response.content)
 
-        with Image.open(thumb_path) as img:
-            img_width, img_height = img.size
-            scale_factor = max(video_width / img_width, video_height / img_height)
-            new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
-            img = img.resize(new_size, Image.LANCZOS)
-            left = (img.width - video_width) / 2
-            top = (img.height - video_height) / 2
-            right = (img.width + video_width) / 2
-            bottom = (img.height + video_height) / 2
-            img = img.crop((left, top, right, bottom))
-            img.save(thumb_path)
-    else:
+            with Image.open(thumb_path) as img:
+                img_width, img_height = img.size
+                scale_factor = max(video_width / img_width, video_height / img_height)
+                new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
+                img = img.resize(new_size, Image.LANCZOS)
+                left = (img.width - video_width) / 2
+                top = (img.height - video_height) / 2
+                right = (img.width + video_width) / 2
+                bottom = (img.height + video_height) / 2
+                img = img.crop((left, top, right, bottom))
+                img.save(thumb_path)
+    except:
         thumb_path = None
 
     caption = (
         f"**🎞 {info_dict['title']}   |   [🔗 URL]({url})**\n\n"
-        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"                     
+        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"
     )
 
-    # Delete the "Download started" message and update the caption to "Uploading started"
     await download_message.delete()
 
     uploading_message = await bot.send_photo(
-        chat_id=query.message.chat.id,
+        chat_id=chat_id,
         photo=thumb_path,
         caption="🚀 **Uploading started...** 📤"
     )
@@ -202,13 +261,13 @@ async def yt_callback_handler(bot, query):
     c_time = time.time()
     try:
         await bot.send_video(
-            chat_id=query.message.chat.id,
+            chat_id=chat_id,
             video=downloaded_path,
             thumb=thumb_path,
             caption=caption,
             duration=duration,
             progress=progress_message,
-            progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
+            progress_args=(f"**📤 Uploading Started...\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
         )
     except Exception as e:
         await uploading_message.edit_text(f"❌ **Error during upload:** {e}")
@@ -216,12 +275,14 @@ async def yt_callback_handler(bot, query):
 
     await uploading_message.delete()
 
-
-    # Clean up the downloaded video file and thumbnail after sending
+    # Cleanup
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
+
+    # Call next item
+    await process_next_in_queue()
 
 @Client.on_callback_query(filters.regex(r'^thumb_https?://(www\.)?youtube\.com/watch\?v='))
 async def thumb_callback_handler(bot, query):
