@@ -144,7 +144,7 @@ async def yt_callback_handler(bot, query):
 
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
     chat_id = query.message.chat.id
-    message_id = query.message.message_id
+    message_id = query.message.id
 
     task = {
         'bot': bot,
