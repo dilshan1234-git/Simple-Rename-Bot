@@ -113,21 +113,3 @@ async def generate_mediainfo(bot, msg):
     except Exception as e:
         print(f"Error removing file: {e}")
 
-
-import requests
-import time
-
-try:
-    response = telegraph_client.create_page(
-        title=file_name,
-        html_content=content
-    )
-except requests.exceptions.ConnectionError:
-    time.sleep(3)  # Wait a bit
-    try:
-        response = telegraph_client.create_page(
-            title=file_name,
-            html_content=content
-        )
-    except Exception as e:
-        return await sts.edit(f"❌ Error generating Telegraph page after retry: {e}")
