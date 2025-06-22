@@ -22,7 +22,7 @@ async def generate_mediainfo(bot, msg):
     file_name = media.file_name
     
     # Initial processing message
-    sts = await msg.reply_text(f"🔄 Processing your file...\n\n📂 <b>{file_name}</b>")
+    sts = await msg.reply_text(f"🔄 Precossing your file...\n\n🗂 <b>{file_name}</b>")
     
     # Start downloading the file
     c_time = time.time()
@@ -112,3 +112,22 @@ async def generate_mediainfo(bot, msg):
         os.remove(downloaded_file_path)
     except Exception as e:
         print(f"Error removing file: {e}")
+
+
+import requests
+import time
+
+try:
+    response = telegraph_client.create_page(
+        title=file_name,
+        html_content=content
+    )
+except requests.exceptions.ConnectionError:
+    time.sleep(3)  # Wait a bit
+    try:
+        response = telegraph_client.create_page(
+            title=file_name,
+            html_content=content
+        )
+    except Exception as e:
+        return await sts.edit(f"❌ Error generating Telegraph page after retry: {e}")
