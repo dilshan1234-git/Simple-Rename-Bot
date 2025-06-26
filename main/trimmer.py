@@ -116,7 +116,7 @@ async def trim_confirm_callback(bot, query):
 
         # Cleanup
         try:
-            os.remove(downloaded)
+            # os.remove(downloaded)
             os.remove(output_video)
             if os.path.exists(thumbnail):
                 os.remove(thumbnail)
