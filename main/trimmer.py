@@ -4,7 +4,6 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL 
 from main.utils import progress_message, humanbytes
-from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
 from moviepy.editor import VideoFileClip
 from main.downloader.ytdl_text import VID_TRIMMER_TEXT
 
@@ -16,7 +15,6 @@ async def start_trim_process(bot, msg):
     chat_id = msg.chat.id
     trim_data[chat_id] = {}
     
-    # Sending the welcome message with the trimmer logo
     await bot.send_photo(
         chat_id=chat_id,
         photo=VID_TRIMMER_URL,
@@ -32,7 +30,10 @@ async def receive_media(bot, msg):
         if media:
             trim_data[chat_id]['media'] = media
             file_name = media.file_name
-            await msg.reply_text(f"📂 **Media received:** `{file_name}`\n\n**⏳ Please send the trimming durations in the format:** `HH:MM:SS HH:MM:SS` (start_time end_time)")
+            await msg.reply_text(
+                f"📂 **Media received:** `{file_name}`\n\n"
+                "**⏳ Please send the trimming durations in the format:** `HH:MM:SS HH:MM:SS` (start_time end_time)"
+            )
 
 @Client.on_message(filters.private & filters.text & filters.user(ADMIN))
 async def receive_durations(bot, msg):
@@ -42,10 +43,9 @@ async def receive_durations(bot, msg):
         if len(durations) == 2:
             start_time_str, end_time_str = durations
             try:
-                # Convert time strings to seconds
                 start_time = sum(int(x) * 60 ** i for i, x in enumerate(reversed(start_time_str.split(":"))))
                 end_time = sum(int(x) * 60 ** i for i, x in enumerate(reversed(end_time_str.split(":"))))
-                
+
                 trim_data[chat_id]['start_time'] = start_time
                 trim_data[chat_id]['end_time'] = end_time
                 trim_data[chat_id]['start_time_str'] = start_time_str
@@ -81,16 +81,17 @@ async def trim_confirm_callback(bot, query):
             progress=progress_message,
             progress_args=("📥 **Download Started...**", sts, c_time)
         )
-        
-        # Extracting thumbnail from the original video
+
         thumbnail = f"{os.path.splitext(downloaded)[0]}_thumbnail.jpg"
         await bot.download_media(media.thumbs[0].file_id, file_name=thumbnail) if media.thumbs else None
 
         output_video = f"{os.path.splitext(downloaded)[0]}_trimmed.mp4"
 
         try:
-            # Use moviepy's ffmpeg_extract_subclip for trimming
-            ffmpeg_extract_subclip(downloaded, start_time, end_time, targetname=output_video)
+            # Trim and write with proper codec
+            clip = VideoFileClip(downloaded).subclip(start_time, end_time)
+            clip.write_videofile(output_video, codec="libx264", audio_codec="aac")
+            clip.close()
         except Exception as e:
             return await sts.edit(f"❌ **Error during trimming:** `{e}`")
 
@@ -103,12 +104,16 @@ async def trim_confirm_callback(bot, query):
                f"🕒 **Duration:** `{duration} seconds`\n"
                f"⏰ **Trimmed From:** `{start_time_str}` **to** `{end_time_str}`")
 
-        await sts.edit(f"🚀 **Uploading started...📤**")
+        await sts.edit("🚀 **Uploading started...📤**")
         c_time = time.time()
         try:
             await bot.send_video(
-                chat_id, video=output_video, caption=cap,
-                duration=duration, thumb=thumbnail if os.path.exists(thumbnail) else None, progress=progress_message,
+                chat_id,
+                video=output_video,
+                caption=cap,
+                duration=duration,
+                thumb=thumbnail if os.path.exists(thumbnail) else None,
+                progress=progress_message,
                 progress_args=(f"🚀 **Upload Started...📤**\n**Thanks To K-MAC For His Trimming Code❤ 🧑‍💻**\n\n**{os.path.basename(output_video)}**", sts, c_time)
             )
         except Exception as e:
@@ -116,7 +121,7 @@ async def trim_confirm_callback(bot, query):
 
         # Cleanup
         try:
-            # os.remove(downloaded)
+            # os.remove(downloaded)  # Keep original video
             os.remove(output_video)
             if os.path.exists(thumbnail):
                 os.remove(thumbnail)
