@@ -88,7 +88,7 @@ async def trim_confirm_callback(bot, query):
         output_video = f"{os.path.splitext(downloaded)[0]}_trimmed.mp4"
 
         try:
-            # Trim and write with proper codec
+            # Trim using MoviePy with codec settings
             clip = VideoFileClip(downloaded).subclip(start_time, end_time)
             clip.write_videofile(output_video, codec="libx264", audio_codec="aac")
             clip.close()
@@ -104,7 +104,13 @@ async def trim_confirm_callback(bot, query):
                f"🕒 **Duration:** `{duration} seconds`\n"
                f"⏰ **Trimmed From:** `{start_time_str}` **to** `{end_time_str}`")
 
-        await sts.edit("🚀 **Uploading started...📤**")
+        # Safe .edit call
+        try:
+            await sts.edit("🚀 **Uploading started...📤**")
+        except Exception as e:
+            if "MESSAGE_NOT_MODIFIED" not in str(e):
+                raise
+
         c_time = time.time()
         try:
             await bot.send_video(
@@ -119,7 +125,7 @@ async def trim_confirm_callback(bot, query):
         except Exception as e:
             return await sts.edit(f"❌ **Error:** `{e}`")
 
-        # Cleanup
+        # Cleanup — keep original, delete only trimmed and thumb
         try:
             # os.remove(downloaded)  # Keep original video
             os.remove(output_video)
