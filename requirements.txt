@@ -10,3 +10,4 @@ telegraph
 pymediainfo
 aiotelegraph
 ffmpeg-python
+mega.py
