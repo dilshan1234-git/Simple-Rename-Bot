@@ -3,7 +3,7 @@ import time
 from pyrogram import Client, filters
 from config import ADMIN, DOWNLOAD_LOCATION, MEGA_EMAIL, MEGA_PASSWORD
 from main.utils import humanbytes, progress_message
-from main.mega_fixed.mega import Mega  # using local fixed MEGA uploader
+from mega import Mega  # real working mega.py (patched fork)
 
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
@@ -19,7 +19,7 @@ async def mega_uploader(bot, msg):
     file_name = media.file_name or "Telegram_File"
     og_media = getattr(reply, reply.media.value)
 
-    # Start downloading from Telegram
+    # Start Telegram download
     sts = await msg.reply("📥 Starting download...")
     c_time = time.time()
     downloaded_path = await reply.download(
@@ -38,7 +38,7 @@ async def mega_uploader(bot, msg):
 
     await sts.edit("📤 Uploading to MEGA...")
 
-    last_status = {"text": None}  # for avoiding MESSAGE_NOT_MODIFIED
+    last_status = {"text": None}  # avoid MESSAGE_NOT_MODIFIED
 
     def mega_progress(current, total):
         percent = (current / total) * 100
@@ -51,17 +51,18 @@ async def mega_uploader(bot, msg):
                 pass
 
     try:
-        uploaded = m.upload(
+        uploaded_file = m.upload(
             file=downloaded_path,
             dest_filename=file_name,
             progress=mega_progress
         )
-        mega_link = m.get_upload_link(uploaded)
+
+        public_link = m.get_upload_link(uploaded_file)
         await sts.edit(
             f"✅ **Uploaded to MEGA!**\n\n"
             f"📁 **File:** `{file_name}`\n"
             f"📦 **Size:** {file_size}\n"
-            f"🔗 [Download Link]({mega_link})",
+            f"🔗 [Download Link]({public_link})",
             disable_web_page_preview=True
         )
     except Exception as e:
