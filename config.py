@@ -15,3 +15,8 @@ VID_TRIMMER_URL = "https://envs.sh/qNI.jpg"
 # for thumbnail ( back end is MrMKN brain 😉)
 DOWNLOAD_LOCATION = "./DOWNLOADS"
 START_IMAGE_URL = "https://envs.sh/klj.jpg"
+
+# config.py
+
+MEGA_EMAIL = "dinethinfinity123@gmail.com"
+MEGA_PASSWORD = "mega1234"
