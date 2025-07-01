@@ -1,77 +1,57 @@
 import os
 import time
-import subprocess
 from pyrogram import Client, filters
-from config import ADMIN, DOWNLOAD_LOCATION, MEGA_EMAIL, MEGA_PASSWORD
-from main.utils import humanbytes, progress_message
+from config import ADMIN, DOWNLOAD_LOCATION
+from main.utils import progress_message, humanbytes
+from mega import Mega
 
+mega = Mega()
+
+# Login to Mega (replace with your credentials or set env vars)
+MEGA_EMAIL = os.getenv("MEGA_EMAIL", "your_email@example.com")
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "your_mega_password")
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
     reply = msg.reply_to_message
-    if not reply:
-        return await msg.reply("⚠️ Please reply to a file (video, audio, or document).")
+    if not reply or not (reply.document or reply.video or reply.audio):
+        return await msg.reply_text("⚠️ Please reply to a file, video, or audio to upload to MEGA.")
 
     media = reply.document or reply.video or reply.audio
-    if not media:
-        return await msg.reply("❌ Unsupported media type.")
-
-    file_name = media.file_name or "Telegram_File"
-    og_media = getattr(reply, reply.media.value)
-
-    # Download file with progress
-    sts = await msg.reply("📥 Starting download...")
+    file_name = media.file_name if media.file_name else "unnamed_file"
+    sts = await msg.reply_text("📥 Starting download to server...")
     c_time = time.time()
-    downloaded_path = await reply.download(
-        file_name=os.path.join(DOWNLOAD_LOCATION, file_name),
-        progress=progress_message,
-        progress_args=("📥 Downloading...", sts, c_time)
-    )
-    file_size = humanbytes(og_media.file_size)
-
-    await sts.edit("🔐 Logging into MEGA and uploading...")
-
-    # Upload with megaput command (from megatools)
-    # --no-progress to reduce noise
-    cmd = [
-        "megaput",
-        "--username", MEGA_EMAIL,
-        "--password", MEGA_PASSWORD,
-        "--no-progress",
-        downloaded_path
-    ]
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)  # 30 min timeout
-    except subprocess.TimeoutExpired:
-        return await sts.edit("❌ Upload timed out!")
+        downloaded_path = await reply.download(
+            file_name=os.path.join(DOWNLOAD_LOCATION, file_name),
+            progress=progress_message,
+            progress_args=("⬇️ Downloading to server...", sts, c_time)
+        )
+    except Exception as e:
+        return await sts.edit(f"❌ Download error: `{e}`")
 
-    if proc.returncode != 0:
-        err = proc.stderr.strip() or "Unknown error"
-        return await sts.edit(f"❌ Upload failed:\n`{err}`")
+    file_size = humanbytes(media.file_size)
 
-    output = proc.stdout.strip()
-    # Example output parsing for public link (adjust if needed)
-    # megaput output usually contains the link at the end or in the output
+    await sts.edit("🔐 Logging in to MEGA...")
+    try:
+        m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
+    except Exception as e:
+        return await sts.edit(f"❌ MEGA login failed: `{e}`")
 
-    # Try to find the public link in output
-    import re
-    match = re.search(r'https://mega.nz/\S+', output)
-    public_link = match.group(0) if match else None
+    await sts.edit("📤 Uploading to MEGA...")
+    c_time = time.time()
 
-    if not public_link:
-        # If no link found, show raw output for debugging
-        public_link = output or "No public link returned"
-
-    await sts.edit(
-        f"✅ Uploaded to MEGA!\n\n"
-        f"📁 File: `{file_name}`\n"
-        f"📦 Size: {file_size}\n"
-        f"🔗 [Download Link]({public_link})",
-        disable_web_page_preview=True
-    )
+    try:
+        file = m.upload(downloaded_path, progress=lambda sent, total: bot.loop.create_task(
+            progress_message("📤 Uploading to MEGA...", sts, c_time, sent, total)))
+        public_url = m.get_upload_link(file)
+    except Exception as e:
+        return await sts.edit(f"❌ Upload failed: `{e}`")
 
     try:
         os.remove(downloaded_path)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
+    await sts.edit(f"✅ Uploaded to MEGA!\n\n📂 File: `{file_name}`\n📦 Size: {file_size}\n🔗 [Open in MEGA]({public_url})", disable_web_page_preview=True)
