@@ -8,8 +8,8 @@ from mega import Mega
 mega = Mega()
 
 # Login to Mega (replace with your credentials or set env vars)
-MEGA_EMAIL = os.getenv("MEGA_EMAIL", "your_email@example.com")
-MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "your_mega_password")
+MEGA_EMAIL = os.getenv("MEGA_EMAIL", "dinethinfinity123@gmail.com")
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "mega1234")
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
