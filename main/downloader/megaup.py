@@ -1,15 +1,9 @@
 import os
 import time
+import subprocess
 from pyrogram import Client, filters
-from config import ADMIN, DOWNLOAD_LOCATION
+from config import ADMIN, DOWNLOAD_LOCATION, MEGA_EMAIL, MEGA_PASSWORD
 from main.utils import progress_message, humanbytes
-from mega import Mega
-
-mega = Mega()
-
-# Login to Mega (replace with your credentials or set env vars)
-MEGA_EMAIL = os.getenv("MEGA_EMAIL", "dinethinfinity123@gmail.com")
-MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "mega1234")
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
@@ -19,39 +13,49 @@ async def mega_uploader(bot, msg):
 
     media = reply.document or reply.video or reply.audio
     file_name = media.file_name if media.file_name else "unnamed_file"
-    sts = await msg.reply_text("📥 Starting download to server...")
+    sts = await msg.reply_text("📥 Downloading file to server...")
     c_time = time.time()
 
     try:
         downloaded_path = await reply.download(
             file_name=os.path.join(DOWNLOAD_LOCATION, file_name),
             progress=progress_message,
-            progress_args=("⬇️ Downloading to server...", sts, c_time)
+            progress_args=("⬇️ Downloading...", sts, c_time)
         )
     except Exception as e:
         return await sts.edit(f"❌ Download error: `{e}`")
 
-    file_size = humanbytes(media.file_size)
-
-    await sts.edit("🔐 Logging in to MEGA...")
-    try:
-        m = mega.login(MEGA_EMAIL, MEGA_PASSWORD)
-    except Exception as e:
-        return await sts.edit(f"❌ MEGA login failed: `{e}`")
-
-    await sts.edit("📤 Uploading to MEGA...")
+    await sts.edit("🔐 Uploading to MEGA...")
     c_time = time.time()
 
     try:
-        file = m.upload(downloaded_path, progress=lambda sent, total: bot.loop.create_task(
-            progress_message("📤 Uploading to MEGA...", sts, c_time, sent, total)))
-        public_url = m.get_upload_link(file)
+        cmd = [
+            "megaput",
+            downloaded_path,
+            "--username", MEGA_EMAIL,
+            "--password", MEGA_PASSWORD
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+
+        if proc.returncode != 0:
+            raise Exception(proc.stderr)
+
+        # Extract MEGA link (optional)
+        mega_link = None
+        for line in proc.stdout.splitlines():
+            if "https://mega.nz" in line:
+                mega_link = line.strip()
+                break
+
     except Exception as e:
         return await sts.edit(f"❌ Upload failed: `{e}`")
 
     try:
         os.remove(downloaded_path)
-    except Exception as e:
-        print(f"Cleanup error: {e}")
+    except:
+        pass
 
-    await sts.edit(f"✅ Uploaded to MEGA!\n\n📂 File: `{file_name}`\n📦 Size: {file_size}\n🔗 [Open in MEGA]({public_url})", disable_web_page_preview=True)
+    await sts.edit(
+        f"✅ File uploaded to MEGA!\n\n📂 File: `{file_name}`\n🔗 Link: {mega_link or 'Not found (check your Mega account manually)'}",
+        disable_web_page_preview=True
+    )
