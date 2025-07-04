@@ -15,14 +15,16 @@ async def mega_uploader(bot, msg):
 
     og_media = getattr(reply, reply.media.value)
     filename = og_media.file_name or "uploaded_file"
-    sts = await msg.reply_text("📥 Downloading file to local storage...")
+    
+    # Initial download message
+    sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
     # Step 1: Download file from Telegram
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
         progress=progress_message,
-        progress_args=("Downloading from Telegram...", sts, c_time)
+        progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
     )
 
     filesize = humanbytes(og_media.file_size)
@@ -44,7 +46,7 @@ async def mega_uploader(bot, msg):
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
     # Step 4: Upload to Mega with progress
-    await sts.edit("🚀 Uploading to Mega.nz...")
+    await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
     cmd = [
         "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
         "--stats=1s", "--log-level", "INFO"
@@ -58,29 +60,28 @@ async def mega_uploader(bot, msg):
     )
 
     last_edit = time.time()
-    lines_buffer = ""
 
-    # Stream live progress to Telegram message
+    # Stream live upload progress
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        lines_buffer += line
         if time.time() - last_edit > 3:
             try:
-                await sts.edit(f"☁️ Uploading...\n\n`{line.strip()}`\n\n📁 File: `{filename}`\n💽 Size: {filesize}")
+                await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n`{line.strip()}`\n\n💽 Size: {filesize}")
             except:
                 pass
             last_edit = time.time()
 
     proc.wait()
 
-    # Step 5: Confirm and clean up
+    # Step 5: Final status
     if proc.returncode == 0:
-        await sts.edit(f"✅ Upload complete to Mega.nz\n\n📁 File: `{filename}`\n💽 Size: {filesize}")
+        await sts.edit(f"✅ **Upload complete to Mega.nz**\n\n📁 File: `{filename}`\n💽 Size: {filesize}")
     else:
         await sts.edit("❌ Upload failed. Please check your credentials or try again later.")
 
+    # Cleanup
     try:
         os.remove(downloaded_path)
     except:
