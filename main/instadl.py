@@ -1,69 +1,74 @@
-import os, time
+import os, re, time
+import requests
 from pyrogram import Client, filters
-from config import ADMIN, DOWNLOAD_LOCATION, INSTA_SESSIONID
+from config import ADMIN, DOWNLOAD_LOCATION
 from main.utils import humanbytes, progress_message
-import instaloader
-from instaloader import Profile
-import re
 
 
 @Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
-async def insta_story_downloader(bot, msg):
+async def instadl_public(bot, msg):
     reply = msg.reply_to_message
     if not reply or not reply.text:
-        return await msg.reply("❌ Please reply to a message containing an Instagram profile URL.")
+        return await msg.reply("⚠️ Please reply to a message that includes an Instagram profile URL.")
 
     match = re.search(r"instagram\.com/([A-Za-z0-9_.]+)", reply.text)
     if not match:
-        return await msg.reply("❌ Invalid Instagram URL. Make sure it contains the username.")
-
+        return await msg.reply("❌ Invalid Instagram profile URL.")
+    
     username = match.group(1)
-    sts = await msg.reply(f"🔍 Fetching stories from `{username}`...")
+    sts = await msg.reply(f"🔍 Fetching stories for `{username}`...")
 
-    L = instaloader.Instaloader(dirname_pattern=DOWNLOAD_LOCATION, download_video_thumbnails=False, save_metadata=False)
-    L.sessionid = INSTA_SESSIONID
+    # Use a public third-party scraper (no login)
+    api_url = f"https://api.storiesig.info/api/stories/{username}"
 
     try:
-        profile = Profile.from_username(L.context, username)
-        stories = L.get_stories(userids=[profile.userid])
+        response = requests.get(api_url)
+        data = response.json()
     except Exception as e:
-        return await sts.edit(f"❌ Failed to fetch stories: `{e}`")
+        return await sts.edit(f"❌ API error: {e}")
+
+    if "items" not in data or not data["items"]:
+        return await sts.edit("ℹ️ No stories found or account may be private.")
 
     total = 0
-    for story in stories:
-        for item in story.get_items():
-            total += 1
-            filename = os.path.join(DOWNLOAD_LOCATION, item.mediaid)
-            try:
-                c_time = time.time()
-                L.download_storyitem(item, target=item.mediaid)
-                files = [f for f in os.listdir(DOWNLOAD_LOCATION) if f.startswith(str(item.mediaid))]
-                for f in files:
-                    path = os.path.join(DOWNLOAD_LOCATION, f)
-                    size = humanbytes(os.path.getsize(path))
-                    caption = f"👤 {username}\n📦 {size}"
-                    if f.endswith(".mp4"):
-                        duration = int(item.video_duration)
-                        await bot.send_video(
-                            chat_id=msg.chat.id,
-                            video=path,
-                            caption=caption,
-                            duration=duration,
-                            progress=progress_message,
-                            progress_args=("📤 Uploading story...", sts, c_time),
-                        )
-                    else:
-                        await bot.send_photo(
-                            chat_id=msg.chat.id,
-                            photo=path,
-                            caption=caption,
-                            progress=progress_message,
-                            progress_args=("📤 Uploading story...", sts, c_time),
-                        )
-                    os.remove(path)
-            except Exception as e:
-                await bot.send_message(msg.chat.id, f"⚠️ Failed: `{e}`")
+    for item in data["items"]:
+        media_url = item.get("video_versions", [{}])[0].get("url") or item.get("image_versions2", {}).get("candidates", [{}])[0].get("url")
+        if not media_url:
+            continue
 
-    if total == 0:
-        return await sts.edit("ℹ️ No stories available for this user.")
-    await sts.edit(f"✅ Downloaded and uploaded {total} stories from **{username}**.")
+        try:
+            total += 1
+            file_ext = ".mp4" if "video" in item else ".jpg"
+            filename = os.path.join(DOWNLOAD_LOCATION, f"{username}_{total}{file_ext}")
+
+            c_time = time.time()
+            with requests.get(media_url, stream=True) as r:
+                with open(filename, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+            size = humanbytes(os.path.getsize(filename))
+            caption = f"👤 {username}\n📦 {size}"
+
+            if filename.endswith(".mp4"):
+                await bot.send_video(
+                    chat_id=msg.chat.id,
+                    video=filename,
+                    caption=caption,
+                    progress=progress_message,
+                    progress_args=("📤 Uploading story...", sts, c_time),
+                )
+            else:
+                await bot.send_photo(
+                    chat_id=msg.chat.id,
+                    photo=filename,
+                    caption=caption,
+                    progress=progress_message,
+                    progress_args=("📤 Uploading story...", sts, c_time),
+                )
+            os.remove(filename)
+        except Exception as e:
+            await bot.send_message(msg.chat.id, f"⚠️ Failed to upload: `{e}`")
+
+    await sts.edit(f"✅ Uploaded {total} public stories from `{username}`.")
