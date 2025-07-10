@@ -20,3 +20,5 @@ START_IMAGE_URL = "https://envs.sh/klj.jpg"
 
 MEGA_EMAIL = "dinethinfinity123@gmail.com"
 MEGA_PASSWORD = "mega1234"
+
+INSTA_SESSIONID = "75426134830%3AVJrORJFiNtLSFZ%3A0%3AAYdLlauUVUSMzDttvHnU6xM-XTJhw8SthBs3dJHdzQ"
