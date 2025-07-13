@@ -375,7 +375,7 @@ async def playlist_video_selected(bot, query):
 @Client.on_callback_query(filters.regex(r'^noop$'))
 async def playlist_jump_request(bot, query):
     user_id = query.from_user.id
-    playlist_page_reply[user_id] = query.message.message_id  # Save the message ID expecting reply
+    playlist_page_reply[user_id] = query.message.id
     await query.answer()
     await bot.send_message(
         chat_id=query.message.chat.id,
@@ -391,7 +391,7 @@ async def jump_to_playlist_page(bot, msg):
         if not expected_msg_id:
             return  # No active jump request for this user
 
-        if not msg.reply_to_message or msg.reply_to_message.message_id != expected_msg_id:
+        if not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
             return  # Not a reply to the correct message
 
         page_number = int(msg.text.strip())
