@@ -285,9 +285,11 @@ async def handle_playlist(bot, msg, url):
         return await msg.reply(f"❌ Failed to parse playlist:\n`{e}`")
 
     playlist_data[msg.from_user.id] = {
-        "videos": entries,
-        "url": url,
-    }
+    "videos": entries,
+    "url": url,
+    "title": info.get("title", "Untitled Playlist"),
+    "done": set()  # to track completed videos
+}
 
     return await send_playlist_page(bot, msg.chat.id, msg.from_user.id, 1)
 
@@ -305,8 +307,14 @@ async def send_playlist_page(bot, chat_id, user_id, page):
 
     buttons = []
     for video in current_page_videos:
-        title = video.get("title", "No title")[:80]  # increased title length from 50 to 80
-        video_url = f"https://www.youtube.com/watch?v={video.get('id')}"
+        vid_id = video.get("id")
+        title = video.get("title", "No title")
+        if vid_id in data.get("done", set()):
+            title = f"✅ {title}"
+        else:
+            title = f"{title}"
+        title = title[:70]  # Optional: shorten long titles
+        video_url = f"https://www.youtube.com/watch?v={vid_id}"
         buttons.append([InlineKeyboardButton(title, callback_data=f"plv_{video_url}")])
 
     nav_buttons = []
@@ -319,7 +327,9 @@ async def send_playlist_page(bot, chat_id, user_id, page):
     buttons.append(nav_buttons)
     markup = InlineKeyboardMarkup(buttons)
 
-    await bot.send_message(chat_id, f"🎞 **Playlist - Page {page}/{total_pages}**", reply_markup=markup)
+    # 🟨 Show the playlist name at the top
+    title_text = f"📂 **{data['title']}**\n🎞 **Playlist - Page {page}/{total_pages}**"
+    await bot.send_message(chat_id, title_text, reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
 async def playlist_page_navigation(bot, query):
@@ -330,8 +340,16 @@ async def playlist_page_navigation(bot, query):
 @Client.on_callback_query(filters.regex(r'^plv_https?://'))
 async def playlist_video_selected(bot, query):
     url = query.data.replace("plv_", "")
+    user_id = query.from_user.id
+
+    # ✅ Mark video as done
+    video_id = url.split("v=")[-1].split("&")[0]
+    if playlist_data.get(user_id):
+        playlist_data[user_id]["done"].add(video_id)
+
+    # Process as usual
     fake_msg = query.message
     fake_msg.text = url
     fake_msg.from_user = query.from_user
     await youtube_link_handler(bot, fake_msg)
-    await query.message.delete()
+    await query.answer("⏳ Processing this video...")
