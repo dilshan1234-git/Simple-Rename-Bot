@@ -305,7 +305,7 @@ async def send_playlist_page(bot, chat_id, user_id, page):
 
     buttons = []
     for video in current_page_videos:
-        title = video.get("title", "No title")[:50]
+        title = video.get("title", "No title")[:80]  # increased title length from 50 to 80
         video_url = f"https://www.youtube.com/watch?v={video.get('id')}"
         buttons.append([InlineKeyboardButton(title, callback_data=f"plv_{video_url}")])
 
