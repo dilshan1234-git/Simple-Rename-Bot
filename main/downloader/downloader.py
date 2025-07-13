@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import math
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -9,28 +10,39 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
+from main.downloader.ytdlset import get_mode
+
+# In-memory store for playlist session data
+playlist_data = {}
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
-    # Replace the placeholder with the actual URL from config.py
     caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
-    
-    # Send the image with the updated caption
     await bot.send_photo(
         chat_id=msg.chat.id,
-        photo=TELEGRAPH_IMAGE_URL,  # Using the URL from config.py
+        photo=TELEGRAPH_IMAGE_URL,
         caption=caption_text,
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-# Command to handle YouTube video link and provide resolution/audio options
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
-
+# Handle incoming YouTube URLs
+@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/'))
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
+    user_id = msg.from_user.id
+    mode = get_mode(user_id)
 
-    # Send processing message
+    if "playlist?list=" in url and mode == "playlist":
+        return await handle_playlist(bot, msg, url)
+
+    if mode == "video" or "watch?v=" in url:
+        return await process_single_video(bot, msg, url)
+
+    return await msg.reply("❌ Please update your mode using `/ytdlset` to handle this URL.")
+
+# ✅ Corrected: process_single_video moved outside and defined properly
+async def process_single_video(bot, msg, url):
     processing_message = await msg.reply_text("🔄 **Processing your request...**")
 
     ydl_opts = {
@@ -261,3 +273,65 @@ async def description_callback_handler(bot, query):
         description = description[:4093] + "..."
 
     await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}")
+
+async def handle_playlist(bot, msg, url):
+    from yt_dlp import YoutubeDL
+    ydl_opts = {'quiet': True, 'extract_flat': True}
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            entries = info.get("entries", [])
+    except Exception as e:
+        return await msg.reply(f"❌ Failed to parse playlist:\n`{e}`")
+
+    playlist_data[msg.from_user.id] = {
+        "videos": entries,
+        "url": url,
+    }
+
+    return await send_playlist_page(bot, msg.chat.id, msg.from_user.id, 1)
+
+async def send_playlist_page(bot, chat_id, user_id, page):
+    data = playlist_data.get(user_id)
+    if not data:
+        return await bot.send_message(chat_id, "❌ Playlist not loaded.")
+
+    videos = data["videos"]
+    total_pages = math.ceil(len(videos) / 10)
+    page = max(1, min(page, total_pages))
+    start = (page - 1) * 10
+    end = start + 10
+    current_page_videos = videos[start:end]
+
+    buttons = []
+    for video in current_page_videos:
+        title = video.get("title", "No title")[:50]
+        video_url = f"https://www.youtube.com/watch?v={video.get('id')}"
+        buttons.append([InlineKeyboardButton(title, callback_data=f"plv_{video_url}")])
+
+    nav_buttons = []
+    if page > 1:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"plpg_{page-1}"))
+    nav_buttons.append(InlineKeyboardButton(f"📄 Page {page}/{total_pages}", callback_data="noop"))
+    if page < total_pages:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"plpg_{page+1}"))
+
+    buttons.append(nav_buttons)
+    markup = InlineKeyboardMarkup(buttons)
+
+    await bot.send_message(chat_id, f"🎞 **Playlist - Page {page}/{total_pages}**", reply_markup=markup)
+
+@Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
+async def playlist_page_navigation(bot, query):
+    page = int(query.data.split('_')[1])
+    await query.message.delete()
+    await send_playlist_page(bot, query.message.chat.id, query.from_user.id, page)
+
+@Client.on_callback_query(filters.regex(r'^plv_https?://'))
+async def playlist_video_selected(bot, query):
+    url = query.data.replace("plv_", "")
+    fake_msg = query.message
+    fake_msg.text = url
+    fake_msg.from_user = query.from_user
+    await youtube_link_handler(bot, fake_msg)
+    await query.message.delete()
