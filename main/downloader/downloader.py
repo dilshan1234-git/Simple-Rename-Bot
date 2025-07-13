@@ -133,9 +133,21 @@ async def process_single_video(bot, msg, url):
     await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
     os.remove(thumb_path)
 
-    if not hasattr(msg, 'fake') or not msg.fake:
-        await msg.delete()
     await processing_message.delete()
+
+@Client.on_callback_query(filters.regex(r'^plv_https?://'))
+async def playlist_video_selected(bot, query):
+    url = query.data.replace("plv_", "")
+    user_id = query.from_user.id
+    video_id = url.split("v=")[-1].split("&")[0]
+    if playlist_data.get(user_id):
+        playlist_data[user_id]["done"].add(video_id)
+    fake_msg = type('msg', (), {})()
+    fake_msg.text = url
+    fake_msg.from_user = query.from_user
+    fake_msg.chat = query.message.chat
+    await youtube_link_handler(bot, fake_msg)
+    await query.answer("⏳ Processing this video...", show_alert=False)
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
