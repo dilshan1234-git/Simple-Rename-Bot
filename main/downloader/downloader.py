@@ -375,30 +375,36 @@ async def playlist_video_selected(bot, query):
 @Client.on_callback_query(filters.regex(r'^noop$'))
 async def playlist_jump_request(bot, query):
     user_id = query.from_user.id
-    playlist_page_reply[user_id] = query.message.id
+
     await query.answer()
-    await bot.send_message(
+
+    # Send a message with ForceReply
+    reply_msg = await bot.send_message(
         chat_id=query.message.chat.id,
         text="📥 **Send the page number you want to jump to:**",
         reply_markup=ForceReply(selective=True)
     )
 
+    # ✅ Store the ForceReply message ID instead of the callback query's message
+    playlist_page_reply[user_id] = reply_msg.id
+
 @Client.on_message(filters.private & filters.text & filters.reply)
 async def jump_to_playlist_page(bot, msg):
     user_id = msg.from_user.id
+
+    expected_msg_id = playlist_page_reply.get(user_id)
+    if not expected_msg_id:
+        return  # No active prompt
+
+    # ✅ Compare with the ForceReply message
+    if not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
+        return
+
     try:
-        expected_msg_id = playlist_page_reply.get(user_id)
-        if not expected_msg_id:
-            return  # No active jump request for this user
-
-        if not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
-            return  # Not a reply to the correct message
-
         page_number = int(msg.text.strip())
         await send_playlist_page(bot, msg.chat.id, user_id, page_number)
-        del playlist_page_reply[user_id]  # Clean up after handling
+        del playlist_page_reply[user_id]  # Clean up
     except ValueError:
         await msg.reply("❌ Please enter a valid number.")
     except Exception as e:
         await msg.reply(f"⚠️ Error: {e}")
-
