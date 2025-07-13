@@ -133,8 +133,10 @@ async def process_single_video(bot, msg, url):
     await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
     os.remove(thumb_path)
 
-    await msg.delete()
+    if msg.from_user.is_bot is False:  # Only delete if it's a real user message
+        await msg.delete()
     await processing_message.delete()
+
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
