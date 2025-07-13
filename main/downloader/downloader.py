@@ -11,9 +11,14 @@ from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 from main.downloader.ytdlset import get_mode
+from pyrogram.types import ForceReply
+from pyrogram.handlers import MessageHandler
 
 # In-memory store for playlist session data
 playlist_data = {}
+
+# Tracks who requested page input (user_id -> message_id)
+playlist_page_reply = {}
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -366,3 +371,34 @@ async def playlist_video_selected(bot, query):
     fake_msg.from_user = query.from_user
     await youtube_link_handler(bot, fake_msg)
     await query.answer("⏳ Processing this video...")
+
+@Client.on_callback_query(filters.regex(r'^noop$'))
+async def playlist_jump_request(bot, query):
+    user_id = query.from_user.id
+    playlist_page_reply[user_id] = query.message.message_id  # Save the message ID expecting reply
+    await query.answer()
+    await bot.send_message(
+        chat_id=query.message.chat.id,
+        text="📥 **Send the page number you want to jump to:**",
+        reply_markup=ForceReply(selective=True)
+    )
+
+@Client.on_message(filters.private & filters.text & filters.reply)
+async def jump_to_playlist_page(bot, msg):
+    user_id = msg.from_user.id
+    try:
+        expected_msg_id = playlist_page_reply.get(user_id)
+        if not expected_msg_id:
+            return  # No active jump request for this user
+
+        if not msg.reply_to_message or msg.reply_to_message.message_id != expected_msg_id:
+            return  # Not a reply to the correct message
+
+        page_number = int(msg.text.strip())
+        await send_playlist_page(bot, msg.chat.id, user_id, page_number)
+        del playlist_page_reply[user_id]  # Clean up after handling
+    except ValueError:
+        await msg.reply("❌ Please enter a valid number.")
+    except Exception as e:
+        await msg.reply(f"⚠️ Error: {e}")
+
