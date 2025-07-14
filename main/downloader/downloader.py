@@ -404,8 +404,12 @@ async def jump_to_playlist_page(bot, msg):
 
     try:
         page_number = int(msg.text.strip())
-        # ✅ Delete previous playlist page message (the one above the reply prompt)
-        messages = await bot.get_chat_history(msg.chat.id, limit=2)
+
+        # ✅ Properly fetch previous messages using async generator
+        messages = []
+        async for m in bot.get_chat_history(msg.chat.id, limit=2):
+            messages.append(m)
+
         for m in messages:
             if m.message_id < msg.message_id:
                 try:
