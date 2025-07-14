@@ -346,7 +346,12 @@ async def send_playlist_page(bot, chat_id, user_id, page):
     markup = InlineKeyboardMarkup(buttons)
 
     # 🟨 Show the playlist name at the top
-    title_text = f"📂 **{data['title']}**\n🎞 **Playlist - Page {page}/{total_pages}**"
+    title_text = (
+    f"📀 **Playlist:** {data['title']}\n"
+    f"📹 **Total Videos:** {len(videos)}\n"
+    f"📄 **Page:** {page} / {total_pages}"
+)
+
     await bot.send_message(chat_id, title_text, reply_markup=markup)
 
 @Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
@@ -391,17 +396,24 @@ async def playlist_jump_request(bot, query):
 @Client.on_message(filters.private & filters.text & filters.reply)
 async def jump_to_playlist_page(bot, msg):
     user_id = msg.from_user.id
-
     expected_msg_id = playlist_page_reply.get(user_id)
-    if not expected_msg_id:
-        return  # No active prompt
 
-    # ✅ Compare with the ForceReply message
-    if not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
+    # ✅ Check if the reply is to the ForceReply message
+    if not expected_msg_id or not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
         return
 
     try:
         page_number = int(msg.text.strip())
+        # ✅ Delete previous playlist page message (the one above the reply prompt)
+        messages = await bot.get_chat_history(msg.chat.id, limit=2)
+        for m in messages:
+            if m.message_id < msg.message_id:
+                try:
+                    await m.delete()
+                    break
+                except:
+                    pass
+
         await send_playlist_page(bot, msg.chat.id, user_id, page_number)
         del playlist_page_reply[user_id]  # Clean up
     except ValueError:
