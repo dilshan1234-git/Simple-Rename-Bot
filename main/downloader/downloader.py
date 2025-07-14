@@ -356,7 +356,7 @@ async def send_playlist_page(bot, chat_id, user_id, page):
 )
 
     sent_msg = await bot.send_message(chat_id, title_text, reply_markup=markup)
-    playlist_page_message_id[user_id] = sent_msg.message_id
+    playlist_page_message_id[user_id] = sent_msg.id
 
 @Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
 async def playlist_page_navigation(bot, query):
