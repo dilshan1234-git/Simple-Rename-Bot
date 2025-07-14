@@ -20,6 +20,9 @@ playlist_data = {}
 # Tracks who requested page input (user_id -> message_id)
 playlist_page_reply = {}
 
+# Tracks the current playlist message (user_id -> message_id)
+playlist_page_message_id = {}
+
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
@@ -352,7 +355,8 @@ async def send_playlist_page(bot, chat_id, user_id, page):
     f"📄 **Page:** {page} / {total_pages}"
 )
 
-    await bot.send_message(chat_id, title_text, reply_markup=markup)
+    sent_msg = await bot.send_message(chat_id, title_text, reply_markup=markup)
+    playlist_page_message_id[user_id] = sent_msg.message_id
 
 @Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
 async def playlist_page_navigation(bot, query):
@@ -398,28 +402,22 @@ async def jump_to_playlist_page(bot, msg):
     user_id = msg.from_user.id
     expected_msg_id = playlist_page_reply.get(user_id)
 
-    # ✅ Check if the reply is to the ForceReply message
     if not expected_msg_id or not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
         return
 
     try:
         page_number = int(msg.text.strip())
 
-        # ✅ Properly fetch previous messages using async generator
-        messages = []
-        async for m in bot.get_chat_history(msg.chat.id, limit=2):
-            messages.append(m)
-
-        for m in messages:
-            if m.message_id < msg.message_id:
-                try:
-                    await m.delete()
-                    break
-                except:
-                    pass
+        # ✅ Delete the previous playlist message using stored ID
+        old_msg_id = playlist_page_message_id.get(user_id)
+        if old_msg_id:
+            try:
+                await bot.delete_messages(msg.chat.id, old_msg_id)
+            except:
+                pass
 
         await send_playlist_page(bot, msg.chat.id, user_id, page_number)
-        del playlist_page_reply[user_id]  # Clean up
+        del playlist_page_reply[user_id]
     except ValueError:
         await msg.reply("❌ Please enter a valid number.")
     except Exception as e:
