@@ -1,26 +1,30 @@
+
 import os
 import time
 import requests
 import math
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
 from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
-from main.downloader.ytdlset import get_settings
+from main.downloader.ytdlset import get_mode
 from pyrogram.types import ForceReply
+from pyrogram.handlers import MessageHandler
 
-# Playlist data and reply tracking
+# In-memory store for playlist session data
 playlist_data = {}
+
+# Tracks who requested page input (user_id -> message_id)
 playlist_page_reply = {}
+
+# Tracks the current playlist message (user_id -> message_id)
 playlist_page_message_id = {}
 
-# Auto download queue
-auto_download_queues = {}
-
+# Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
     caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
@@ -31,35 +35,23 @@ async def ytdl(bot, msg):
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
+# Handle incoming YouTube URLs
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/'))
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
     user_id = msg.from_user.id
-    settings = get_settings(user_id)
-    mode = settings["mode"]
-    auto_enabled = settings["auto_download"]
+    mode = get_mode(user_id)
 
     if "playlist?list=" in url and mode == "playlist":
         return await handle_playlist(bot, msg, url)
 
     if mode == "video" or "watch?v=" in url:
-        if auto_enabled:
-            auto_download_queues.setdefault(user_id, []).append(url)
-            await msg.reply(
-                f"📝 Queued for Auto Download.\nTotal in queue: {len(auto_download_queues[user_id])}",
-                reply_markup=ReplyKeyboardMarkup(
-                    keyboard=[[KeyboardButton("✅ Done"), KeyboardButton("❌ Cancel")]],
-                    resize_keyboard=True,
-                    one_time_keyboard=True
-                )
-            )
-            return
-        else:
-            await msg.delete()
-            return await process_single_video(bot, msg, url)
+        await msg.delete()  # ✅ Delete the original YouTube URL message
+        return await process_single_video(bot, msg, url)
 
     return await msg.reply("❌ Please update your mode using `/ytdlset` to handle this URL.")
 
+# ✅ Corrected: process_single_video moved outside and defined properly
 async def process_single_video(bot, msg, url):
     processing_message = await msg.reply_text("🔄 **Processing your request...**")
 
@@ -75,6 +67,7 @@ async def process_single_video(bot, msg, url):
         views = info_dict.get('view_count', 'N/A')
         likes = info_dict.get('like_count', 'N/A')
         thumb_url = info_dict.get('thumbnail', None)
+        description = info_dict.get('description', 'No description available.')
         formats = info_dict.get('formats', [])
         duration_seconds = info_dict.get('duration', 0)
         uploader = info_dict.get('uploader', 'Unknown Channel')
@@ -84,6 +77,7 @@ async def process_single_video(bot, msg, url):
     available_resolutions = []
     available_audio = []
 
+    # ✅ Only include AVC/H.264 resolutions
     for f in formats:
         if f['ext'] == 'mp4' and f.get('vcodec') and 'avc1' in f['vcodec'].lower():
             resolution = f"{f['height']}p"
@@ -95,6 +89,7 @@ async def process_single_video(bot, msg, url):
                 filesize_str = humanbytes(filesize)
                 format_id = f['format_id']
                 available_resolutions.append((resolution, filesize_str, format_id))
+
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize')
             if filesize:
@@ -104,6 +99,8 @@ async def process_single_video(bot, msg, url):
 
     buttons = []
     row = []
+
+    # 🔘 Add resolution buttons (AVC only)
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
@@ -111,9 +108,11 @@ async def process_single_video(bot, msg, url):
         if len(row) == 2:
             buttons.append(row)
             row = []
+
     if row:
         buttons.append(row)
 
+    # 🔊 Highest quality audio
     if available_audio:
         highest_quality_audio = max(
             available_audio,
@@ -122,6 +121,7 @@ async def process_single_video(bot, msg, url):
         _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
+    # 📝 Description and Thumbnail
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -142,19 +142,10 @@ async def process_single_video(bot, msg, url):
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
     with open(thumb_path, 'wb') as thumb_file:
         thumb_file.write(thumb_response.content)
-
-    sent_msg = await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
+    await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
     os.remove(thumb_path)
+
     await processing_message.delete()
-    return sent_msg
-
-# Export required variables/functions
-__all__ = [
-    "process_single_video",
-    "youtube_link_handler",
-    "auto_download_queues"
-]
-
 
 @Client.on_callback_query(filters.regex(r'^plv_https?://'))
 async def playlist_video_selected(bot, query):
