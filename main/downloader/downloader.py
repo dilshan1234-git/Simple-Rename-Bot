@@ -46,8 +46,10 @@ async def youtube_link_handler(bot, msg):
         return await handle_playlist(bot, msg, url)
 
     if mode == "video" or "watch?v=" in url:
-        await msg.delete()  # ✅ Delete the original YouTube URL message
-        return await process_single_video(bot, msg, url)
+       # ✅ Only delete original user message, not fake playlist clicks
+       if hasattr(msg, "id"):
+           await msg.delete()
+       return await process_single_video(bot, msg, url)
 
     return await msg.reply("❌ Please update your mode using `/ytdlset` to handle this URL.")
 
