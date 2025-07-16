@@ -373,23 +373,6 @@ async def playlist_page_navigation(bot, query):
     await query.message.delete()
     await send_playlist_page(bot, query.message.chat.id, query.from_user.id, page)
 
-@Client.on_callback_query(filters.regex(r'^plv_https?://'))
-async def playlist_video_selected(bot, query):
-    url = query.data.replace("plv_", "")
-    user_id = query.from_user.id
-
-    # ✅ Mark video as done
-    video_id = url.split("v=")[-1].split("&")[0]
-    if playlist_data.get(user_id):
-        playlist_data[user_id]["done"].add(video_id)
-
-    # Process as usual
-    fake_msg = query.message
-    fake_msg.text = url
-    fake_msg.from_user = query.from_user
-    await youtube_link_handler(bot, fake_msg)
-    await query.answer("⏳ Processing this video...")
-
 @Client.on_callback_query(filters.regex(r'^noop$'))
 async def playlist_jump_request(bot, query):
     user_id = query.from_user.id
