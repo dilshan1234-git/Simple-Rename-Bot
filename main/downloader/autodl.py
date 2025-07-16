@@ -5,6 +5,7 @@ from pyrogram import Client, filters
 from pyrogram.types import ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from main.downloader.ytdlset import get_settings
 from main.downloader.downloader import process_single_video, yt_callback_handler, auto_download_queues
+from config import ADMIN
 
 @Client.on_message(filters.private & filters.text & filters.user)
 async def handle_auto_download_commands(bot, msg):
