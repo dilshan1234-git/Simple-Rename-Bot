@@ -76,20 +76,19 @@ async def process_single_video(bot, msg, url):
     available_resolutions = []
     available_audio = []
 
+    # ✅ Only include AVC/H.264 resolutions
     for f in formats:
-        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
+        if f['ext'] == 'mp4' and f.get('vcodec') and 'avc1' in f['vcodec'].lower():
             resolution = f"{f['height']}p"
-            fps = f.get('fps', None)
+            fps = f.get('fps')
             if fps in [50, 60]:
                 resolution += f"{fps}fps"
             filesize = f.get('filesize')
             if filesize:
                 filesize_str = humanbytes(filesize)
                 format_id = f['format_id']
-                vcodec = f.get('vcodec', '')
-                is_avc = 'avc1' in vcodec.lower()  # ✅ Only show checkmark if it's AVC/H.264
-                resolution_display = f"✅ {resolution}" if is_avc else resolution
-                available_resolutions.append((resolution_display, filesize_str, format_id))
+                available_resolutions.append((resolution, filesize_str, format_id))
+
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize')
             if filesize:
@@ -100,6 +99,7 @@ async def process_single_video(bot, msg, url):
     buttons = []
     row = []
 
+    # 🔘 Add resolution buttons (AVC only)
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
@@ -111,6 +111,7 @@ async def process_single_video(bot, msg, url):
     if row:
         buttons.append(row)
 
+    # 🔊 Highest quality audio
     if available_audio:
         highest_quality_audio = max(
             available_audio,
@@ -119,6 +120,7 @@ async def process_single_video(bot, msg, url):
         _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
+    # 📝 Description and Thumbnail
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
