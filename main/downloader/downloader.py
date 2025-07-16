@@ -55,7 +55,7 @@ async def process_single_video(bot, msg, url):
     processing_message = await msg.reply_text("🔄 **Processing your request...**")
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Prefer AVC/AAC format
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
         'noplaylist': True,
         'quiet': True
     }
@@ -67,62 +67,62 @@ async def process_single_video(bot, msg, url):
         likes = info_dict.get('like_count', 'N/A')
         thumb_url = info_dict.get('thumbnail', None)
         description = info_dict.get('description', 'No description available.')
-        formats = info_dict.get('formats', [])      
+        formats = info_dict.get('formats', [])
         duration_seconds = info_dict.get('duration', 0)
         uploader = info_dict.get('uploader', 'Unknown Channel')
 
-    # Format the duration as HH:MM:SS
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
 
-    # Extract all available resolutions with their sizes
     available_resolutions = []
     available_audio = []
 
     for f in formats:
-        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':  # Check for video formats
+        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
             resolution = f"{f['height']}p"
-            fps = f.get('fps', None)  # Get the fps (frames per second)
-            if fps in [50, 60]:  # Append fps to the resolution if it's 50 or 60
+            fps = f.get('fps', None)
+            if fps in [50, 60]:
                 resolution += f"{fps}fps"
-            filesize = f.get('filesize')  # Fetch the filesize
-            if filesize:  # Only process if filesize is not None
-                filesize_str = humanbytes(filesize)  # Convert size to human-readable format
-                format_id = f['format_id']
-                available_resolutions.append((resolution, filesize_str, format_id))
-        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':  # Check for audio formats
             filesize = f.get('filesize')
             if filesize:
-                filesize_str = humanbytes(filesize)  # Show file size instead of bitrate
+                filesize_str = humanbytes(filesize)
+                format_id = f['format_id']
+                vcodec = f.get('vcodec', '')
+                is_avc = 'avc1' in vcodec.lower()  # ✅ Only show checkmark if it's AVC/H.264
+                resolution_display = f"✅ {resolution}" if is_avc else resolution
+                available_resolutions.append((resolution_display, filesize_str, format_id))
+        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
+            filesize = f.get('filesize')
+            if filesize:
+                filesize_str = humanbytes(filesize)
                 format_id = f['format_id']
                 available_audio.append((filesize, filesize_str, format_id))
 
     buttons = []
     row = []
-    
-    # Add available resolutions to the buttons
+
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
         row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        if len(row) == 2:  # Adjust the number of buttons per row if needed
+        if len(row) == 2:
             buttons.append(row)
             row = []
 
     if row:
         buttons.append(row)
 
-    # Find the highest quality audio based on the largest file size (in bytes)
     if available_audio:
-        highest_quality_audio = max(available_audio, key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000))
-        _, size, format_id = highest_quality_audio  # Extract the size and format_id
+        highest_quality_audio = max(
+            available_audio,
+            key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000)
+        )
+        _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
-    
-    # Add description and thumbnail buttons in the same row
+
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
-
 
     markup = InlineKeyboardMarkup(buttons)
 
