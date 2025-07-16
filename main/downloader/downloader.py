@@ -37,7 +37,7 @@ async def ytdl(bot, msg):
 
 # Handle incoming YouTube URLs
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/'))
-async def youtube_link_handler(bot, msg):
+async def youtube_link_handler(bot, msg, from_playlist=False):
     url = msg.text.strip()
     user_id = msg.from_user.id
     mode = get_mode(user_id)
