@@ -46,10 +46,13 @@ async def youtube_link_handler(bot, msg, from_playlist=False):
         return await handle_playlist(bot, msg, url)
 
     if mode == "video" or "watch?v=" in url:
-       # ✅ Only delete original user message, not fake playlist clicks
-       if hasattr(msg, "id"):
-           await msg.delete()
-       return await process_single_video(bot, msg, url)
+        # ✅ Only delete if not triggered from a playlist button click
+        if not from_playlist:
+            try:
+                await msg.delete()
+            except:
+                pass
+        return await process_single_video(bot, msg, url)
 
     return await msg.reply("❌ Please update your mode using `/ytdlset` to handle this URL.")
 
@@ -160,7 +163,7 @@ async def playlist_video_selected(bot, query):
     fake_msg.text = url
     fake_msg.from_user = query.from_user
     fake_msg.chat = query.message.chat
-    await youtube_link_handler(bot, fake_msg)
+    await youtube_link_handler(bot, fake_msg, from_playlist=True)
     await query.answer("⏳ Processing this video...", show_alert=False)
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
