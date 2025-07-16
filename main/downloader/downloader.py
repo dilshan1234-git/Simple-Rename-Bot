@@ -155,7 +155,6 @@ __all__ = [
     "auto_download_queues"
 ]
 
-    await processing_message.delete()
 
 @Client.on_callback_query(filters.regex(r'^plv_https?://'))
 async def playlist_video_selected(bot, query):
