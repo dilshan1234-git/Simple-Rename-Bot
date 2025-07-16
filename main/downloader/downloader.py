@@ -157,12 +157,33 @@ async def playlist_video_selected(bot, query):
     url = query.data.replace("plv_", "")
     user_id = query.from_user.id
     video_id = url.split("v=")[-1].split("&")[0]
+
     if playlist_data.get(user_id):
         playlist_data[user_id]["done"].add(video_id)
-    fake_msg = type('msg', (), {})()
-    fake_msg.text = url
-    fake_msg.from_user = query.from_user
-    fake_msg.chat = query.message.chat
+
+    # Use the original message object but override .text
+    class FakeMessage:
+        def __init__(self, query, text):
+            self.text = text
+            self.chat = query.message.chat
+            self.from_user = query.from_user
+            self.id = query.message.id
+            self._bot = bot
+
+        async def reply_text(self, text, **kwargs):
+            return await self._bot.send_message(self.chat.id, text, **kwargs)
+
+        async def reply(self, text, **kwargs):
+            return await self._bot.send_message(self.chat.id, text, **kwargs)
+
+        async def delete(self):
+            try:
+                await self._bot.delete_messages(self.chat.id, self.id)
+            except:
+                pass
+
+    fake_msg = FakeMessage(query, text=url)
+
     await youtube_link_handler(bot, fake_msg, from_playlist=True)
     await query.answer("⏳ Processing this video...", show_alert=False)
 
