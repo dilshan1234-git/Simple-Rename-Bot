@@ -1,4 +1,4 @@
-import os, time, subprocess
+import os, time, subprocess, re
 from pyrogram import Client, filters
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
@@ -16,10 +16,9 @@ async def mega_uploader(bot, msg):
     og_media = getattr(reply, reply.media.value)
     filename = og_media.file_name or "uploaded_file"
     
-    # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Download file from Telegram
+    # Step 1: Download from Telegram
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -38,7 +37,7 @@ async def mega_uploader(bot, msg):
     except Exception as e:
         return await sts.edit(f"❌ Failed to load mega_login.txt: {e}")
 
-    # Step 3: Create rclone config file
+    # Step 3: Create rclone config
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
     obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
@@ -47,9 +46,9 @@ async def mega_uploader(bot, msg):
 
     # Step 4: Upload to Mega with progress
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO"
+        "rclone", "copy", downloaded_path, "mega:", "--stats=2s", "--stats-one-line", "--log-level", "INFO"
     ]
 
     proc = subprocess.Popen(
@@ -59,19 +58,26 @@ async def mega_uploader(bot, msg):
         text=True
     )
 
-    last_edit = time.time()
+    last_update = time.time()
+    progress_line = ""
 
-    # Stream live upload progress
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        if time.time() - last_edit > 3:
-            try:
-                await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n`{line.strip()}`\n\n💽 Size: {filesize}")
-            except:
-                pass
-            last_edit = time.time()
+
+        # Look for rclone progress lines like:
+        # Transferred:   	    45.678 MiB / 200.123 MiB, 23%, 3.456 MiB/s, ETA 00:45
+        if "Transferred:" in line:
+            progress_line = line.strip()
+            if time.time() - last_update > 2:
+                try:
+                    await sts.edit(
+                        f"☁️ **Uploading:** **`{filename}`**\n\n`{progress_line}`\n\n💽 Size: {filesize}"
+                    )
+                except:
+                    pass
+                last_update = time.time()
 
     proc.wait()
 
