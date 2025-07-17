@@ -109,12 +109,19 @@ async def mega_uploader(bot, msg):
 # Step 7: Handle Info button
 @Client.on_callback_query(filters.regex("mega_info"))
 async def mega_info_callback(bot: Client, query: CallbackQuery):
-    await query.answer()  # Close the button loading
+    await query.answer()  # close the button spinner
+
+    # Correct path where rclone.conf was written
+    rclone_config_path = "/root/.config/rclone/"
+    rclone_config_file = os.path.join(rclone_config_path, "rclone.conf")
+
+    if not os.path.exists(rclone_config_file):
+        return await query.message.reply_text("❌ Mega config not found. Upload something first using /megaup.")
+
     try:
-        # Use the same config file path
-        rclone_config_path = "/root/.config/rclone/rclone.conf"
+        # Set RCLONE_CONFIG so rclone can find the config
         env = os.environ.copy()
-        env["RCLONE_CONFIG"] = rclone_config_path
+        env["RCLONE_CONFIG"] = rclone_config_file
 
         result = subprocess.check_output(
             ["rclone", "about", "mega:"],
@@ -122,6 +129,8 @@ async def mega_info_callback(bot: Client, query: CallbackQuery):
             text=True,
             env=env
         )
+
         await query.message.reply_text(f"📊 **Cloud Info (Mega.nz):**\n\n`{result.strip()}`")
+
     except subprocess.CalledProcessError as e:
         await query.message.reply_text(f"❌ Failed to fetch Mega info:\n\n`{e.output.strip()}`")
