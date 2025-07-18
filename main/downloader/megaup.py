@@ -45,11 +45,12 @@ async def mega_uploader(bot, msg):
     with open(rclone_config_path + "rclone.conf", "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Upload to Mega with progress
+    # Step 4: Upload to Mega with real-time progress
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO"
+        "rclone", "copyto", downloaded_path, f"mega:{filename}",
+        "--progress", "--stats-one-line", "--stats=1s"
     ]
 
     proc = subprocess.Popen(
@@ -59,30 +60,21 @@ async def mega_uploader(bot, msg):
         text=True
     )
 
-    last_edit = time.time()
+    start_time = time.time()
+    latest_update = ""
 
-    # Stream live upload progress
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        if time.time() - last_edit > 3:
+        if "Transferred:" in line:
+            # Example: Transferred: 15.323 MiB / 100.123 MiB, 15%, 1.23 MiB/s, ETA 1m10s
+            latest_update = line.strip()
             try:
-                await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n`{line.strip()}`\n\n💽 Size: {filesize}")
+                await sts.edit(
+                    f"☁️ **Uploading:** **`{filename}`**\n\n`{latest_update}`\n\n💽 Size: {filesize}"
+                )
             except:
                 pass
-            last_edit = time.time()
 
     proc.wait()
-
-    # Step 5: Final status
-    if proc.returncode == 0:
-        await sts.edit(f"✅ **Upload complete to Mega.nz**\n\n📁 File: `{filename}`\n💽 Size: {filesize}")
-    else:
-        await sts.edit("❌ Upload failed. Please check your credentials or try again later.")
-
-    # Cleanup
-    try:
-        os.remove(downloaded_path)
-    except:
-        pass
