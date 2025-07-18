@@ -2,7 +2,6 @@
 import os
 import time
 import requests
-import math
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -11,57 +10,32 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
-from main.downloader.ytdlset import get_mode
-from pyrogram.types import ForceReply
-from pyrogram.handlers import MessageHandler
-
-# In-memory store for playlist session data
-playlist_data = {}
-
-# Tracks who requested page input (user_id -> message_id)
-playlist_page_reply = {}
-
-# Tracks the current playlist message (user_id -> message_id)
-playlist_page_message_id = {}
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
+    # Replace the placeholder with the actual URL from config.py
     caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
+    
+    # Send the image with the updated caption
     await bot.send_photo(
         chat_id=msg.chat.id,
-        photo=TELEGRAPH_IMAGE_URL,
+        photo=TELEGRAPH_IMAGE_URL,  # Using the URL from config.py
         caption=caption_text,
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-# Handle incoming YouTube URLs
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/'))
-async def youtube_link_handler(bot, msg, from_playlist=False):
+# Command to handle YouTube video link and provide resolution/audio options
+@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
+
+async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
-    user_id = msg.from_user.id
-    mode = get_mode(user_id)
 
-    if "playlist?list=" in url and mode == "playlist":
-        return await handle_playlist(bot, msg, url)
-
-    if mode == "video" or "watch?v=" in url:
-        # ✅ Only delete if not triggered from a playlist button click
-        if not from_playlist:
-            try:
-                await msg.delete()
-            except:
-                pass
-        return await process_single_video(bot, msg, url)
-
-    return await msg.reply("❌ Please update your mode using `/ytdlset` to handle this URL.")
-
-# ✅ Corrected: process_single_video moved outside and defined properly
-async def process_single_video(bot, msg, url):
+    # Send processing message
     processing_message = await msg.reply_text("🔄 **Processing your request...**")
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Prefer AVC/AAC format
         'noplaylist': True,
         'quiet': True
     }
@@ -73,64 +47,62 @@ async def process_single_video(bot, msg, url):
         likes = info_dict.get('like_count', 'N/A')
         thumb_url = info_dict.get('thumbnail', None)
         description = info_dict.get('description', 'No description available.')
-        formats = info_dict.get('formats', [])
+        formats = info_dict.get('formats', [])      
         duration_seconds = info_dict.get('duration', 0)
         uploader = info_dict.get('uploader', 'Unknown Channel')
 
+    # Format the duration as HH:MM:SS
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
 
+    # Extract all available resolutions with their sizes
     available_resolutions = []
     available_audio = []
 
-    # ✅ Only include AVC/H.264 resolutions
     for f in formats:
-        if f['ext'] == 'mp4' and f.get('vcodec') and 'avc1' in f['vcodec'].lower():
+        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':  # Check for video formats
             resolution = f"{f['height']}p"
-            fps = f.get('fps')
-            if fps in [50, 60]:
+            fps = f.get('fps', None)  # Get the fps (frames per second)
+            if fps in [50, 60]:  # Append fps to the resolution if it's 50 or 60
                 resolution += f"{fps}fps"
-            filesize = f.get('filesize')
-            if filesize:
-                filesize_str = humanbytes(filesize)
+            filesize = f.get('filesize')  # Fetch the filesize
+            if filesize:  # Only process if filesize is not None
+                filesize_str = humanbytes(filesize)  # Convert size to human-readable format
                 format_id = f['format_id']
                 available_resolutions.append((resolution, filesize_str, format_id))
-
-        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
+        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':  # Check for audio formats
             filesize = f.get('filesize')
             if filesize:
-                filesize_str = humanbytes(filesize)
+                filesize_str = humanbytes(filesize)  # Show file size instead of bitrate
                 format_id = f['format_id']
                 available_audio.append((filesize, filesize_str, format_id))
 
     buttons = []
     row = []
-
-    # 🔘 Add resolution buttons (AVC only)
+    
+    # Add available resolutions to the buttons
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
         row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        if len(row) == 2:
+        if len(row) == 2:  # Adjust the number of buttons per row if needed
             buttons.append(row)
             row = []
 
     if row:
         buttons.append(row)
 
-    # 🔊 Highest quality audio
+    # Find the highest quality audio based on the largest file size (in bytes)
     if available_audio:
-        highest_quality_audio = max(
-            available_audio,
-            key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000)
-        )
-        _, size, format_id = highest_quality_audio
+        highest_quality_audio = max(available_audio, key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000))
+        _, size, format_id = highest_quality_audio  # Extract the size and format_id
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
-
-    # 📝 Description and Thumbnail
+    
+    # Add description and thumbnail buttons in the same row
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
+
 
     markup = InlineKeyboardMarkup(buttons)
 
@@ -150,42 +122,8 @@ async def process_single_video(bot, msg, url):
     await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
     os.remove(thumb_path)
 
+    await msg.delete()
     await processing_message.delete()
-
-@Client.on_callback_query(filters.regex(r'^plv_https?://'))
-async def playlist_video_selected(bot, query):
-    url = query.data.replace("plv_", "")
-    user_id = query.from_user.id
-    video_id = url.split("v=")[-1].split("&")[0]
-
-    if playlist_data.get(user_id):
-        playlist_data[user_id]["done"].add(video_id)
-
-    # Use the original message object but override .text
-    class FakeMessage:
-        def __init__(self, query, text):
-            self.text = text
-            self.chat = query.message.chat
-            self.from_user = query.from_user
-            self.id = query.message.id
-            self._bot = bot
-
-        async def reply_text(self, text, **kwargs):
-            return await self._bot.send_message(self.chat.id, text, **kwargs)
-
-        async def reply(self, text, **kwargs):
-            return await self._bot.send_message(self.chat.id, text, **kwargs)
-
-        async def delete(self):
-            try:
-                await self._bot.delete_messages(self.chat.id, self.id)
-            except:
-                pass
-
-    fake_msg = FakeMessage(query, text=url)
-
-    await youtube_link_handler(bot, fake_msg, from_playlist=True)
-    await query.answer("⏳ Processing this video...", show_alert=False)
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
@@ -324,114 +262,3 @@ async def description_callback_handler(bot, query):
         description = description[:4093] + "..."
 
     await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}")
-
-async def handle_playlist(bot, msg, url):
-    from yt_dlp import YoutubeDL
-    ydl_opts = {'quiet': True, 'extract_flat': True}
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            entries = info.get("entries", [])
-    except Exception as e:
-        return await msg.reply(f"❌ Failed to parse playlist:\n`{e}`")
-
-    playlist_data[msg.from_user.id] = {
-    "videos": entries,
-    "url": url,
-    "title": info.get("title", "Untitled Playlist"),
-    "done": set()  # to track completed videos
-}
-
-    return await send_playlist_page(bot, msg.chat.id, msg.from_user.id, 1)
-
-async def send_playlist_page(bot, chat_id, user_id, page):
-    data = playlist_data.get(user_id)
-    if not data:
-        return await bot.send_message(chat_id, "❌ Playlist not loaded.")
-
-    videos = data["videos"]
-    total_pages = math.ceil(len(videos) / 10)
-    page = max(1, min(page, total_pages))
-    start = (page - 1) * 10
-    end = start + 10
-    current_page_videos = videos[start:end]
-
-    buttons = []
-    for video in current_page_videos:
-        vid_id = video.get("id")
-        title = video.get("title", "No title")
-        if vid_id in data.get("done", set()):
-            title = f"✅ {title}"
-        else:
-            title = f"{title}"
-        title = title[:70]  # Optional: shorten long titles
-        video_url = f"https://www.youtube.com/watch?v={vid_id}"
-        buttons.append([InlineKeyboardButton(title, callback_data=f"plv_{video_url}")])
-
-    nav_buttons = []
-    if page > 1:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"plpg_{page-1}"))
-    nav_buttons.append(InlineKeyboardButton(f"📄 Page {page}/{total_pages}", callback_data="noop"))
-    if page < total_pages:
-        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"plpg_{page+1}"))
-
-    buttons.append(nav_buttons)
-    markup = InlineKeyboardMarkup(buttons)
-
-    # 🟨 Show the playlist name at the top
-    title_text = (
-    f"📀 **Playlist:** {data['title']}\n"
-    f"📹 **Total Videos:** {len(videos)}\n"
-    f"📄 **Page:** {page} / {total_pages}"
-)
-
-    sent_msg = await bot.send_message(chat_id, title_text, reply_markup=markup)
-    playlist_page_message_id[user_id] = sent_msg.id
-
-@Client.on_callback_query(filters.regex(r'^plpg_\d+$'))
-async def playlist_page_navigation(bot, query):
-    page = int(query.data.split('_')[1])
-    await query.message.delete()
-    await send_playlist_page(bot, query.message.chat.id, query.from_user.id, page)
-
-@Client.on_callback_query(filters.regex(r'^noop$'))
-async def playlist_jump_request(bot, query):
-    user_id = query.from_user.id
-
-    await query.answer()
-
-    # Send a message with ForceReply
-    reply_msg = await bot.send_message(
-        chat_id=query.message.chat.id,
-        text="📥 **Send the page number you want to jump to:**",
-        reply_markup=ForceReply(selective=True)
-    )
-
-    # ✅ Store the ForceReply message ID instead of the callback query's message
-    playlist_page_reply[user_id] = reply_msg.id
-
-@Client.on_message(filters.private & filters.text & filters.reply)
-async def jump_to_playlist_page(bot, msg):
-    user_id = msg.from_user.id
-    expected_msg_id = playlist_page_reply.get(user_id)
-
-    if not expected_msg_id or not msg.reply_to_message or msg.reply_to_message.id != expected_msg_id:
-        return
-
-    try:
-        page_number = int(msg.text.strip())
-
-        # ✅ Delete the previous playlist message using stored ID
-        old_msg_id = playlist_page_message_id.get(user_id)
-        if old_msg_id:
-            try:
-                await bot.delete_messages(msg.chat.id, old_msg_id)
-            except:
-                pass
-
-        await send_playlist_page(bot, msg.chat.id, user_id, page_number)
-        del playlist_page_reply[user_id]
-    except ValueError:
-        await msg.reply("❌ Please enter a valid number.")
-    except Exception as e:
-        await msg.reply(f"⚠️ Error: {e}")
