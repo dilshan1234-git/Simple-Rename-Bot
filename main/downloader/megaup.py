@@ -46,12 +46,16 @@ async def mega_uploader(bot, msg):
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Upload to Mega with progress
+    # Step 4: Show Uploading Status in Bot (Static)
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+
+    # Step 5: Upload to Mega and stream output to Colab logs
     cmd = [
         "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
         "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
+
+    print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
 
     proc = subprocess.Popen(
         cmd,
@@ -60,22 +64,16 @@ async def mega_uploader(bot, msg):
         text=True
     )
 
-    last_edit = time.time()
-
+    # Print rclone progress in Colab logs
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        if time.time() - last_edit > 3:
-            try:
-                await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n`{line.strip()}`\n\n💽 Size: {filesize}")
-            except:
-                pass
-            last_edit = time.time()
+        print(line.strip())
 
     proc.wait()
 
-    # Step 5: Get Mega Storage Info (via --json)
+    # Step 6: Get Mega Storage Info (via --json)
     try:
         about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
         stats = json.loads(about_output)
@@ -100,7 +98,7 @@ async def mega_uploader(bot, msg):
         used_pct = 0
         bar = "░" * 10
 
-    # Step 6: Final Message with Storage Info and Delete Button
+    # Step 7: Final Message with Storage Info and Delete Button
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
@@ -119,7 +117,7 @@ async def mega_uploader(bot, msg):
 
     await sts.edit(final_text, reply_markup=btn)
 
-    # Step 7: Cleanup
+    # Step 8: Cleanup
     try:
         os.remove(downloaded_path)
     except:
