@@ -1,4 +1,4 @@
-import os, time, subprocess
+import os, time, subprocess, re
 from pyrogram import Client, filters
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
@@ -42,7 +42,7 @@ async def mega_uploader(bot, msg):
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
     obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
-    with open(rclone_config_path + "rclone.conf", "w") as f:
+    with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
     # Step 4: Upload to Mega with real-time progress
@@ -50,7 +50,7 @@ async def mega_uploader(bot, msg):
 
     cmd = [
         "rclone", "copyto", downloaded_path, f"mega:{filename}",
-        "--progress", "--stats-one-line", "--stats=1s"
+        "--progress", "--stats=1s", "--stats-one-line", "--log-level", "INFO"
     ]
 
     proc = subprocess.Popen(
@@ -60,21 +60,45 @@ async def mega_uploader(bot, msg):
         text=True
     )
 
-    start_time = time.time()
-    latest_update = ""
+    last_edit = time.time()
 
     while True:
         line = proc.stdout.readline()
         if not line:
-            break
+            if proc.poll() is not None:
+                break
+            continue
+
+        line = line.strip()
+
         if "Transferred:" in line:
-            # Example: Transferred: 15.323 MiB / 100.123 MiB, 15%, 1.23 MiB/s, ETA 1m10s
-            latest_update = line.strip()
-            try:
-                await sts.edit(
-                    f"☁️ **Uploading:** **`{filename}`**\n\n`{latest_update}`\n\n💽 Size: {filesize}"
-                )
-            except:
-                pass
+            # Clean up and extract the stats string
+            match = re.search(r"Transferred:\s+(.+)", line)
+            if match:
+                progress_info = match.group(1)
+
+                # Optional: Remove multiple spaces
+                progress_info = re.sub(r'\s+', ' ', progress_info)
+
+                if time.time() - last_edit > 2:
+                    try:
+                        await sts.edit(
+                            f"☁️ **Uploading:** **`{filename}`**\n\n`{progress_info}`"
+                        )
+                        last_edit = time.time()
+                    except:
+                        pass
 
     proc.wait()
+
+    # Step 5: Final status
+    if proc.returncode == 0:
+        await sts.edit(f"✅ **Upload complete to Mega.nz**\n\n📁 File: `{filename}`\n💽 Size: {filesize}")
+    else:
+        await sts.edit("❌ Upload failed. Please check your credentials or try again later.")
+
+    # Cleanup
+    try:
+        os.remove(downloaded_path)
+    except:
+        pass
