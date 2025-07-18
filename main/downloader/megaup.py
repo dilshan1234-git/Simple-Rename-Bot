@@ -1,4 +1,4 @@
-import os, time, subprocess
+import os, time, subprocess, json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -39,18 +39,18 @@ async def mega_uploader(bot, msg):
     except Exception as e:
         return await sts.edit(f"❌ Failed to load mega_login.txt: {e}")
 
-    # Step 3: Create rclone config
+    # Step 3: Create rclone config file
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
     obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
-    with open(rclone_config_path + "rclone.conf", "w") as f:
+    with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Upload to Mega
+    # Step 4: Upload to Mega with progress
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
     cmd = [
         "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO"
+        "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
     proc = subprocess.Popen(
@@ -75,39 +75,43 @@ async def mega_uploader(bot, msg):
 
     proc.wait()
 
-    # Step 5: Get Mega Storage Info
-    df_output = os.popen("rclone about mega: --config /root/.config/rclone/rclone.conf").read()
-    total, used, free, used_pct = "Unknown", "Unknown", "Unknown", 0
-    for line in df_output.splitlines():
-        if "Total:" in line:
-            total = line.split(":")[1].strip()
-        elif "Used:" in line:
-            used = line.split(":")[1].strip()
-        elif "Free:" in line:
-            free = line.split(":")[1].strip()
-
-    # Try to calculate used percentage
+    # Step 5: Get Mega Storage Info (via --json)
     try:
-        total_bytes = int(os.popen("rclone about mega: --bytes --config /root/.config/rclone/rclone.conf | grep Total | awk '{print $2}'").read().strip())
-        used_bytes = int(os.popen("rclone about mega: --bytes --config /root/.config/rclone/rclone.conf | grep Used | awk '{print $2}'").read().strip())
-        used_pct = int((used_bytes / total_bytes) * 100)
-    except:
+        about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
+        stats = json.loads(about_output)
+
+        total_bytes = stats.get("total", 0)
+        used_bytes = stats.get("used", 0)
+        free_bytes = stats.get("free", 0)
+
+        total = humanbytes(total_bytes)
+        used = humanbytes(used_bytes)
+        free = humanbytes(free_bytes)
+
+        used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+
+        # Draw storage bar
+        full_blocks = used_pct // 10
+        empty_blocks = 10 - full_blocks
+        bar = "█" * full_blocks + "░" * empty_blocks
+
+    except Exception as e:
+        total = used = free = "Unknown"
         used_pct = 0
+        bar = "░" * 10
 
-    # Draw storage bar
-    full_blocks = used_pct // 10
-    empty_blocks = 10 - full_blocks
-    bar = "█" * full_blocks + "░" * empty_blocks
-
-    # Final Message with Delete Button
-    final_text = (
-        f"✅ **Upload Complete to Mega.nz!**\n\n"
-        f"📁 **File:** `{filename}`\n"
-        f"💽 **Size:** {filesize}\n\n"
-        f"📦 **Mega Storage**\n"
-        f"Used: `{used}` / Total: `{total}`\n"
-        f"{bar} `{used_pct}%` used"
-    )
+    # Step 6: Final Message with Storage Info and Delete Button
+    if proc.returncode == 0:
+        final_text = (
+            f"✅ **Upload Complete to Mega.nz!**\n\n"
+            f"📁 **File:** `{filename}`\n"
+            f"💽 **Size:** {filesize}\n\n"
+            f"📦 **Mega Storage**\n"
+            f"Used: `{used}` / Total: `{total}`\n"
+            f"{bar} `{used_pct}%` used"
+        )
+    else:
+        final_text = "❌ Upload failed. Please check your credentials or try again later."
 
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
@@ -115,7 +119,7 @@ async def mega_uploader(bot, msg):
 
     await sts.edit(final_text, reply_markup=btn)
 
-    # Cleanup
+    # Step 7: Cleanup
     try:
         os.remove(downloaded_path)
     except:
