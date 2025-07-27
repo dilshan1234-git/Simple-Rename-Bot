@@ -42,7 +42,6 @@ async def receive_durations(bot, msg):
         if len(durations) == 2:
             start_time_str, end_time_str = durations
             try:
-                # Convert time strings to seconds
                 start_time = sum(int(x) * 60 ** i for i, x in enumerate(reversed(start_time_str.split(":"))))
                 end_time = sum(int(x) * 60 ** i for i, x in enumerate(reversed(end_time_str.split(":"))))
                 
@@ -122,7 +121,14 @@ async def trim_confirm_callback(bot, query):
                f"🕒 **Duration:** `{duration} seconds`\n"
                f"⏰ **Trimmed From:** `{start_time_str}` **to** `{end_time_str}`")
 
-        await sts.edit(f"🚀 **Uploading started...📤**")
+        # 🔧 FIXED: Avoid MESSAGE_NOT_MODIFIED error
+        upload_msg = "🚀 **Uploading started...📤**"
+        if sts.text != upload_msg:
+            try:
+                await sts.edit(upload_msg)
+            except:
+                pass
+
         c_time = time.time()
         try:
             await bot.send_video(
