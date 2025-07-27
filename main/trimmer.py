@@ -1,10 +1,10 @@
 import time
 import os
+import subprocess
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL 
 from main.utils import progress_message, humanbytes
-from moviepy.video.io.ffmpeg_tools import ffmpeg_extract_subclip
 from moviepy.editor import VideoFileClip
 from main.downloader.ytdl_text import VID_TRIMMER_TEXT
 
@@ -89,8 +89,27 @@ async def trim_confirm_callback(bot, query):
         output_video = f"{os.path.splitext(downloaded)[0]}_trimmed.mp4"
 
         try:
-            # Use moviepy's ffmpeg_extract_subclip for trimming
-            ffmpeg_extract_subclip(downloaded, start_time, end_time, targetname=output_video)
+            # Use ffmpeg via subprocess to safely trim even complex MKV videos
+            start = time.strftime('%H:%M:%S', time.gmtime(start_time))
+            end = time.strftime('%H:%M:%S', time.gmtime(end_time))
+
+            cmd = [
+                "ffmpeg",
+                "-i", downloaded,
+                "-ss", start,
+                "-to", end,
+                "-map", "0:v:0",
+                "-map", "0:a:0",
+                "-c:v", "copy",
+                "-c:a", "aac",
+                "-movflags", "+faststart",
+                output_video
+            ]
+
+            process = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+            if process.returncode != 0:
+                return await sts.edit(f"❌ **Error during trimming:**\n```{process.stderr.decode()}```")
         except Exception as e:
             return await sts.edit(f"❌ **Error during trimming:** `{e}`")
 
