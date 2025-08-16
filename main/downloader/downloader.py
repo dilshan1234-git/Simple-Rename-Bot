@@ -272,32 +272,39 @@ async def description_callback_handler(bot, query):
 
 @Client.on_callback_query(filters.regex(r'^subs_'))
 async def subtitles_callback_handler(bot, query):
-    # Reverse only the replacements you did
-    safe_url = query.data.split('_', 1)[1]
-    url = safe_url.replace("_", "?")  # only decode '?' replacements
+    url = query.data.split('_', 1)[1]  # use original URL as is
 
     ydl_opts = {
-        'writesubtitles': True,         # Enable subtitles
-        'subtitlesformat': 'srt',       # Convert to SRT
-        'skip_download': True,           # Only download subtitles
+        'writesubtitles': True,          # Manual subtitles
+        'writeautomaticsub': True,       # Auto-generated subtitles
+        'subtitlesformat': 'srt',        # Convert to SRT
+        'skip_download': True,           # Don't download video
         'quiet': True
     }
 
-    # Send a processing message
+    # Processing message
     processing_msg = await query.message.edit_text("💬 **Fetching subtitles...**")
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             title = info_dict.get('title', 'Unknown Title')
-            subtitles = info_dict.get('subtitles', {})
-            
-            if not subtitles:
+
+            # Combine manual and automatic subtitles
+            subs_manual = info_dict.get('subtitles', {})
+            subs_auto = info_dict.get('automatic_captions', {})
+
+            all_subs = subs_manual.copy()
+            for lang, sub_list in subs_auto.items():
+                if lang not in all_subs:
+                    all_subs[lang] = sub_list
+
+            if not all_subs:
                 await processing_msg.edit_text("❌ **No subtitles found for this video.**")
                 return
-            
-            sent_files = []
-            for lang, sub_list in subtitles.items():
+
+            # Send each subtitle file
+            for lang, sub_list in all_subs.items():
                 for sub in sub_list:
                     sub_url = sub['url']
                     response = requests.get(sub_url)
@@ -306,10 +313,9 @@ async def subtitles_callback_handler(bot, query):
                         filepath = os.path.join(DOWNLOAD_LOCATION, filename)
                         with open(filepath, 'wb') as f:
                             f.write(response.content)
-                        sent_files.append(filepath)
                         await bot.send_document(chat_id=query.message.chat.id, document=filepath)
                         os.remove(filepath)
-        
+
         await processing_msg.delete()
     except Exception as e:
         await processing_msg.edit_text(f"❌ **Error fetching subtitles:** {e}")
