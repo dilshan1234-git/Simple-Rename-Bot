@@ -97,10 +97,15 @@ async def youtube_link_handler(bot, msg):
         _, size, format_id = highest_quality_audio  # Extract the size and format_id
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
     
-    # Add description and thumbnail buttons in the same row
+    # Row for description and thumbnail
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
+    ])
+
+    # Row for subtitles
+    buttons.append([
+        InlineKeyboardButton("💬 Subtitles", callback_data=f"subs_{url}")
     ])
 
 
@@ -262,3 +267,45 @@ async def description_callback_handler(bot, query):
         description = description[:4093] + "..."
 
     await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}")
+
+@Client.on_callback_query(filters.regex(r'^subs_https?://(www\.)?youtube\.com/watch\?v='))
+async def subtitles_callback_handler(bot, query):
+    url = '_'.join(query.data.split('_')[1:])
+
+    ydl_opts = {
+        'writesubtitles': True,         # Enable subtitles
+        'subtitlesformat': 'srt',       # Convert to SRT
+        'skip_download': True,           # Only download subtitles
+        'quiet': True
+    }
+
+    # Send a processing message
+    processing_msg = await query.message.edit_text("💬 **Fetching subtitles...**")
+
+    try:
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=True)
+            title = info_dict.get('title', 'Unknown Title')
+            subtitles = info_dict.get('subtitles', {})
+            
+            if not subtitles:
+                await processing_msg.edit_text("❌ **No subtitles found for this video.**")
+                return
+            
+            sent_files = []
+            for lang, sub_list in subtitles.items():
+                for sub in sub_list:
+                    sub_url = sub['url']
+                    response = requests.get(sub_url)
+                    if response.status_code == 200:
+                        filename = f"{title}_{lang}.srt"
+                        filepath = os.path.join(DOWNLOAD_LOCATION, filename)
+                        with open(filepath, 'wb') as f:
+                            f.write(response.content)
+                        sent_files.append(filepath)
+                        await bot.send_document(chat_id=query.message.chat.id, document=filepath)
+                        os.remove(filepath)
+        
+        await processing_msg.delete()
+    except Exception as e:
+        await processing_msg.edit_text(f"❌ **Error fetching subtitles:** {e}")
