@@ -103,11 +103,12 @@ async def youtube_link_handler(bot, msg):
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
 
-    # Row for subtitles
-    safe_sub_url = url.replace(":", "_").replace("/", "_").replace("?", "_").replace("=", "_").replace("&", "_")
+    # Button creation
+    safe_sub_url = url.replace("?", "_").replace("=", "_").replace("&", "_")
     buttons.append([
         InlineKeyboardButton("💬 Subtitles", callback_data=f"subs_{safe_sub_url}")
     ])
+
 
 
     markup = InlineKeyboardMarkup(buttons)
