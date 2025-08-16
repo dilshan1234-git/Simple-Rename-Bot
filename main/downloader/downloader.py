@@ -272,8 +272,9 @@ async def description_callback_handler(bot, query):
 
 @Client.on_callback_query(filters.regex(r'^subs_'))
 async def subtitles_callback_handler(bot, query):
+    # Reverse only the replacements you did
     safe_url = query.data.split('_', 1)[1]
-    url = safe_url.replace("_", "/")  # approximate reverse for YouTube URL
+    url = safe_url.replace("_", "?")  # only decode '?' replacements
 
     ydl_opts = {
         'writesubtitles': True,         # Enable subtitles
