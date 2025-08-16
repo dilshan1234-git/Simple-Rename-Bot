@@ -104,8 +104,9 @@ async def youtube_link_handler(bot, msg):
     ])
 
     # Row for subtitles
+    safe_sub_url = url.replace(":", "_").replace("/", "_").replace("?", "_").replace("=", "_").replace("&", "_")
     buttons.append([
-        InlineKeyboardButton("💬 Subtitles", callback_data=f"subs_{url}")
+        InlineKeyboardButton("💬 Subtitles", callback_data=f"subs_{safe_sub_url}")
     ])
 
 
@@ -268,9 +269,10 @@ async def description_callback_handler(bot, query):
 
     await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}")
 
-@Client.on_callback_query(filters.regex(r'^subs_https?://(www\.)?youtube\.com/watch\?v='))
+@Client.on_callback_query(filters.regex(r'^subs_'))
 async def subtitles_callback_handler(bot, query):
-    url = '_'.join(query.data.split('_')[1:])
+    safe_url = query.data.split('_', 1)[1]
+    url = safe_url.replace("_", "/")  # approximate reverse for YouTube URL
 
     ydl_opts = {
         'writesubtitles': True,         # Enable subtitles
