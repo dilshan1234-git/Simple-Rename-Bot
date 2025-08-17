@@ -3,7 +3,7 @@ import os
 import time
 import asyncio
 import requests
-import yt_dlp as youtube_dl
+import yt_dlp
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
@@ -17,14 +17,14 @@ last_edit_time = {}
 async def download_progress_hook(d, bot, chat_id, message_id, title, resolution):
     if d['status'] != 'downloading':
         return
-    
+
     now = time.time()
     key = f"{chat_id}:{message_id}"
     if key in last_edit_time and now - last_edit_time[key] < 1:  # throttle 1s
         return
     last_edit_time[key] = now
 
-    percent = d.get('_percent_str', '').strip()
+    percent = d.get('_percent_str', '0%').strip()
     speed = d.get('_speed_str', 'N/A')
     eta = d.get('_eta_str', 'N/A')
 
@@ -41,7 +41,6 @@ async def download_progress_hook(d, bot, chat_id, message_id, title, resolution)
         await bot.edit_message_text(chat_id, message_id, text)
     except Exception:
         pass
-
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -171,13 +170,11 @@ async def yt_callback_handler(bot, query):
     download_message = await query.message.edit_text(
         f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}\n\n⏳ **Progress:** 0%"
     )
-
     chat_id = download_message.chat.id
     message_id = download_message.id
 
     # Thread-safe hook for yt_dlp
     def hook_wrapper(d):
-        # schedule the async function in bot's event loop safely
         asyncio.run_coroutine_threadsafe(
             download_progress_hook(d, bot, chat_id, message_id, title, resolution),
             bot.loop
@@ -187,7 +184,7 @@ async def yt_callback_handler(bot, query):
         'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [hook_wrapper],  # 👈 thread-safe
+        'progress_hooks': [hook_wrapper],
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
@@ -195,7 +192,7 @@ async def yt_callback_handler(bot, query):
     }
 
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # 👈 use yt_dlp here
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
     except Exception as e:
