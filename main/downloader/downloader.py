@@ -1,6 +1,7 @@
 
 import os
 import time
+import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -135,7 +136,7 @@ class DownloadProgress:
         self.last_update_time = time.time()
         self.last_downloaded = 0
         
-    async def progress_hook(self, d):
+    def progress_hook(self, d):
         if d['status'] == 'downloading':
             now = time.time()
             if now - self.last_update_time >= 1:  # Update every 1 second
@@ -176,8 +177,13 @@ class DownloadProgress:
                         f"**⏱️ ETA:** {eta_str}"
                     )
                     
+                    # Use run_sync to run the async edit_text in a sync context
+                    import asyncio
                     try:
-                        await self.message.edit_text(msg)
+                        asyncio.run_coroutine_threadsafe(
+                            self.message.edit_text(msg),
+                            self.bot.loop
+                        ).result()
                     except:
                         pass
                     
@@ -227,6 +233,7 @@ async def yt_callback_handler(bot, query):
         await download_message.edit_text(f"❌ **Error during download:** {e}")
         return
 
+    # Rest of your code remains the same...
     final_filesize = os.path.getsize(downloaded_path)
     video = VideoFileClip(downloaded_path)
     duration = int(video.duration)
