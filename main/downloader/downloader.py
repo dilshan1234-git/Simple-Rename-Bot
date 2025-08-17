@@ -11,6 +11,29 @@ from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 
+
+# Progress hook function
+async def download_progress_hook(d, message):
+    if d['status'] == 'downloading':
+        percent = d.get('_percent_str', '').strip()
+        speed = d.get('_speed_str', 'N/A')
+        eta = d.get('_eta_str', 'N/A')
+        
+        text = (
+            f"📥 **Download started...**\n\n"
+            f"🎞 {d.get('info_dict', {}).get('title', 'Unknown Title')}\n"
+            f"📹 {d.get('info_dict', {}).get('format_note', '')}\n\n"
+            f"⏳ **Progress:** {percent}\n"
+            f"⚡ **Speed:** {speed}\n"
+            f"⌛ **ETA:** {eta}"
+        )
+
+        try:
+            await message.edit_text(text)
+        except:
+            pass  # avoid flooding errors if Telegram rate-limits edits
+
+
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
@@ -125,6 +148,7 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -132,32 +156,37 @@ async def yt_callback_handler(bot, query):
     resolution = data[2]
     url = query.data.split('_', 3)[3]
 
-    # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    # Initial message
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}\n\n⏳ **Progress:** 0%"
+    )
 
-    
+    # Hook wrapper so we can pass the Telegram message
+    def hook_wrapper(d):
+        # Call async progress updater inside event loop
+        bot.loop.create_task(download_progress_hook(d, download_message))
+
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
+        'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
+        'progress_hooks': [hook_wrapper],   # 👈 Add hook here
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }]
-        
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
-        
     except Exception as e:
         await download_message.edit_text(f"❌ **Error during download:** {e}")
         return
+
 
     final_filesize = os.path.getsize(downloaded_path)
     video = VideoFileClip(downloaded_path)
