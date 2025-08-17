@@ -11,35 +11,35 @@ from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 
-
-# store last edit time
-last_edit_time = 0  
+last_edit_time = {}
 
 async def download_progress_hook(d, bot, chat_id, message_id, title, resolution):
-    global last_edit_time
-    if d['status'] == 'downloading':
-        now = time.time()
-        if now - last_edit_time < 1:  # throttle updates every 1 sec
-            return
-        last_edit_time = now
+    if d['status'] != 'downloading':
+        return
+    
+    now = time.time()
+    key = f"{chat_id}:{message_id}"
+    if key in last_edit_time and now - last_edit_time[key] < 1:  # throttle 1s
+        return
+    last_edit_time[key] = now
 
-        percent = d.get('_percent_str', '').strip()
-        speed = d.get('_speed_str', 'N/A')
-        eta = d.get('_eta_str', 'N/A')
+    percent = d.get('_percent_str', '').strip()
+    speed = d.get('_speed_str', 'N/A')
+    eta = d.get('_eta_str', 'N/A')
 
-        text = (
-            f"📥 **Download started...**\n\n"
-            f"🎞 {title}\n"
-            f"📹 {resolution}\n\n"
-            f"⏳ **Progress:** {percent}\n"
-            f"⚡ **Speed:** {speed}\n"
-            f"⌛ **ETA:** {eta}"
-        )
+    text = (
+        f"📥 **Download started...**\n\n"
+        f"🎞 {title}\n"
+        f"📹 {resolution}\n\n"
+        f"⏳ **Progress:** {percent}\n"
+        f"⚡ **Speed:** {speed}\n"
+        f"⌛ **ETA:** {eta}"
+    )
 
-        try:
-            await bot.edit_message_text(chat_id, message_id, text)
-        except Exception:
-            pass
+    try:
+        await bot.edit_message_text(chat_id, message_id, text)
+    except Exception:
+        pass
 
 
 # Command to display welcome text with the YouTube link handler
@@ -156,6 +156,7 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -165,7 +166,7 @@ async def yt_callback_handler(bot, query):
 
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # send initial msg
+    # Initial message
     download_message = await query.message.edit_text(
         f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}\n\n⏳ **Progress:** 0%"
     )
@@ -173,7 +174,7 @@ async def yt_callback_handler(bot, query):
     chat_id = download_message.chat.id
     message_id = download_message.id
 
-    # Hook wrapper
+    # Hook wrapper (bridge yt-dlp → async bot edit)
     def hook_wrapper(d):
         bot.loop.create_task(
             download_progress_hook(d, bot, chat_id, message_id, title, resolution)
@@ -190,7 +191,6 @@ async def yt_callback_handler(bot, query):
         }]
     }
 
-    # run yt-dlp
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
