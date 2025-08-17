@@ -125,6 +125,71 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+# Progress hook class for live updates
+class DownloadProgress:
+    def __init__(self, bot, chat_id, message, start_time):
+        self.bot = bot
+        self.chat_id = chat_id
+        self.message = message
+        self.start_time = start_time
+        self.last_update_time = time.time()
+        self.last_downloaded = 0
+        
+    async def progress_hook(self, d):
+        if d['status'] == 'downloading':
+            now = time.time()
+            if now - self.last_update_time >= 1:  # Update every 1 second
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
+                speed = d.get('speed', 0)
+                elapsed = now - self.start_time
+                
+                if total > 0:
+                    percentage = min(100, (downloaded / total) * 100)
+                    progress_str = self.get_progress_bar(percentage)
+                    speed_str = humanbytes(speed) + "/s"
+                    downloaded_str = humanbytes(downloaded)
+                    total_str = humanbytes(total)
+                    
+                    # Calculate ETA if speed > 0
+                    if speed > 0:
+                        remaining_bytes = total - downloaded
+                        eta = remaining_bytes / speed
+                        eta_str = time.strftime("%H:%M:%S", time.gmtime(eta))
+                    else:
+                        eta_str = "Calculating..."
+                        
+                    # Calculate elapsed time
+                    elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed))
+                    
+                    # Calculate download speed difference
+                    if downloaded > 0 and self.last_downloaded > 0 and now - self.last_update_time > 0:
+                        current_speed = (downloaded - self.last_downloaded) / (now - self.last_update_time)
+                        speed_str = f"{humanbytes(current_speed)}/s"
+                    
+                    msg = (
+                        f"📥 **Downloading...**\n\n"
+                        f"**{progress_str} {percentage:.1f}%**\n\n"
+                        f"**📦 Size:** {downloaded_str} / {total_str}\n"
+                        f"**🚀 Speed:** {speed_str}\n"
+                        f"**⏳ Elapsed:** {elapsed_str}\n"
+                        f"**⏱️ ETA:** {eta_str}"
+                    )
+                    
+                    try:
+                        await self.message.edit_text(msg)
+                    except:
+                        pass
+                    
+                    self.last_update_time = now
+                    self.last_downloaded = downloaded
+    
+    def get_progress_bar(self, percentage):
+        progress_bar_length = 10
+        filled_length = int(progress_bar_length * percentage // 100)
+        bar = '▓' * filled_length + '░' * (progress_bar_length - filled_length)
+        return bar
+
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -136,8 +201,11 @@ async def yt_callback_handler(bot, query):
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
     # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
-
+    start_time = time.time()
+    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\nGetting download information...")
+    
+    # Create progress handler
+    progress_handler = DownloadProgress(bot, query.message.chat.id, download_message, start_time)
     
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
@@ -146,8 +214,8 @@ async def yt_callback_handler(bot, query):
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }]
-        
+        }],
+        'progress_hooks': [progress_handler.progress_hook]
     }
 
     try:
