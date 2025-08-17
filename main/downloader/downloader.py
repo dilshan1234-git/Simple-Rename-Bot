@@ -137,36 +137,53 @@ class DownloadProgress:
         self.last_downloaded = 0
         
     def progress_hook(self, d):
-        if d['status'] == 'downloading':
-            now = time.time()
-            if now - self.last_update_time >= 1:  # Update every 1 second
-                downloaded = d.get('downloaded_bytes', 0)
-                total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0)
-                speed = d.get('speed', 0)
-                elapsed = now - self.start_time
-                
-                if total > 0:
-                    percentage = min(100, (downloaded / total) * 100)
-                    progress_str = self.get_progress_bar(percentage)
-                    speed_str = humanbytes(speed) + "/s"
-                    downloaded_str = humanbytes(downloaded)
-                    total_str = humanbytes(total)
+        try:
+            if d['status'] == 'downloading':
+                now = time.time()
+                if now - self.last_update_time >= 1:  # Update every 1 second
+                    # Safely get values with defaults
+                    downloaded = d.get('downloaded_bytes', 0) or 0
+                    total = d.get('total_bytes', 0) or d.get('total_bytes_estimate', 0) or 0
+                    speed = d.get('speed', 0) or 0
+                    elapsed = now - self.start_time
                     
-                    # Calculate ETA if speed > 0
-                    if speed > 0:
-                        remaining_bytes = total - downloaded
-                        eta = remaining_bytes / speed
-                        eta_str = time.strftime("%H:%M:%S", time.gmtime(eta))
-                    else:
-                        eta_str = "Calculating..."
-                        
+                    # Calculate percentage if we have a total
+                    percentage = 0
+                    if total > 0:
+                        percentage = min(100, (downloaded / total) * 100)
+                    
+                    progress_str = self.get_progress_bar(percentage)
+                    
+                    # Safely convert to human-readable format
+                    try:
+                        speed_str = f"{humanbytes(speed)}/s"
+                        downloaded_str = humanbytes(downloaded)
+                        total_str = humanbytes(total)
+                    except:
+                        speed_str = "Unknown speed"
+                        downloaded_str = "Unknown"
+                        total_str = "Unknown"
+                    
+                    # Calculate ETA if we have speed and remaining bytes
+                    eta_str = "Calculating..."
+                    if speed > 0 and total > 0:
+                        try:
+                            remaining_bytes = total - downloaded
+                            eta = remaining_bytes / speed
+                            eta_str = time.strftime("%H:%M:%S", time.gmtime(eta))
+                        except:
+                            pass
+                    
                     # Calculate elapsed time
                     elapsed_str = time.strftime("%H:%M:%S", time.gmtime(elapsed))
                     
-                    # Calculate download speed difference
+                    # Calculate current speed if possible
                     if downloaded > 0 and self.last_downloaded > 0 and now - self.last_update_time > 0:
-                        current_speed = (downloaded - self.last_downloaded) / (now - self.last_update_time)
-                        speed_str = f"{humanbytes(current_speed)}/s"
+                        try:
+                            current_speed = (downloaded - self.last_downloaded) / (now - self.last_update_time)
+                            speed_str = f"{humanbytes(current_speed)}/s"
+                        except:
+                            pass
                     
                     msg = (
                         f"📥 **Downloading...**\n\n"
@@ -184,11 +201,13 @@ class DownloadProgress:
                             self.message.edit_text(msg),
                             self.bot.loop
                         ).result()
-                    except:
-                        pass
+                    except Exception as e:
+                        print(f"Error updating progress message: {e}")
                     
                     self.last_update_time = now
                     self.last_downloaded = downloaded
+        except Exception as e:
+            print(f"Error in progress hook: {e}")
     
     def get_progress_bar(self, percentage):
         progress_bar_length = 10
