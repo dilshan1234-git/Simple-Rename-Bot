@@ -3,7 +3,7 @@ import os
 import time
 import asyncio
 import requests
-import yt_dlp
+import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
@@ -11,6 +11,7 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
+import yt_dlp
 
 last_edit_time = {}
 
