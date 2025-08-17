@@ -1,6 +1,7 @@
 
 import os
 import time
+import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -166,7 +167,7 @@ async def yt_callback_handler(bot, query):
 
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Initial message
+    # Initial Telegram message
     download_message = await query.message.edit_text(
         f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}\n\n⏳ **Progress:** 0%"
     )
@@ -174,17 +175,19 @@ async def yt_callback_handler(bot, query):
     chat_id = download_message.chat.id
     message_id = download_message.id
 
-    # Hook wrapper (bridge yt-dlp → async bot edit)
+    # Thread-safe hook for yt_dlp
     def hook_wrapper(d):
-        bot.loop.create_task(
-            download_progress_hook(d, bot, chat_id, message_id, title, resolution)
+        # schedule the async function in bot's event loop safely
+        asyncio.run_coroutine_threadsafe(
+            download_progress_hook(d, bot, chat_id, message_id, title, resolution),
+            bot.loop
         )
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [hook_wrapper],
+        'progress_hooks': [hook_wrapper],  # 👈 thread-safe
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
