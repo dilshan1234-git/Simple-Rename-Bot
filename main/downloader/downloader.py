@@ -13,35 +13,6 @@ from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 import yt_dlp
 
-last_edit_time = {}
-
-async def download_progress_hook(d, bot, chat_id, message_id, title, resolution):
-    if d['status'] != 'downloading':
-        return
-
-    now = time.time()
-    key = f"{chat_id}:{message_id}"
-    if key in last_edit_time and now - last_edit_time[key] < 1:  # throttle 1s
-        return
-    last_edit_time[key] = now
-
-    percent = d.get('_percent_str', '0%').strip()
-    speed = d.get('_speed_str', 'N/A')
-    eta = d.get('_eta_str', 'N/A')
-
-    text = (
-        f"📥 **Download started...**\n\n"
-        f"🎞 {title}\n"
-        f"📹 {resolution}\n\n"
-        f"⏳ **Progress:** {percent}\n"
-        f"⚡ **Speed:** {speed}\n"
-        f"⌛ **ETA:** {eta}"
-    )
-
-    try:
-        await bot.edit_message_text(chat_id, message_id, text)
-    except Exception:
-        pass
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -157,6 +128,36 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+last_edit_time = {}
+
+async def download_progress_hook(d, bot, progress_message_id, chat_id):
+    if d.get('status') != 'downloading':
+        return
+
+    now = time.time()
+    key = f"{chat_id}:{progress_message_id}"
+    if key in last_edit_time and now - last_edit_time[key] < 1:  # throttle 1s
+        return
+    last_edit_time[key] = now
+
+    # Calculate percent manually
+    total = d.get('total_bytes') or d.get('total_bytes_estimate')
+    downloaded = d.get('downloaded_bytes', 0)
+    percent = f"{(downloaded / total * 100) if total else 0:.1f}%"
+
+    speed = d.get('speed', 0)
+    eta = d.get('eta', 0)
+
+    text = (
+        f"⏳ **Progress:** {percent}\n"
+        f"⚡ **Speed:** {humanbytes(speed)}/s\n"
+        f"⌛ **ETA:** {time.strftime('%H:%M:%S', time.gmtime(eta))}"
+    )
+
+    try:
+        await bot.edit_message_text(chat_id, progress_message_id, text)
+    except Exception:
+        pass
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
@@ -164,20 +165,22 @@ async def yt_callback_handler(bot, query):
     format_id = data[1]
     resolution = data[2]
     url = query.data.split('_', 3)[3]
-
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Initial Telegram message
-    download_message = await query.message.edit_text(
-        f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}\n\n⏳ **Progress:** 0%"
+    # Original download started message
+    await query.message.edit_text(
+        f"📥 **Download started...**\n\n🎞 {title}\n📹 {resolution}"
     )
-    chat_id = download_message.chat.id
-    message_id = download_message.id
 
-    # Thread-safe hook for yt_dlp
+    # New message for live progress
+    progress_msg = await bot.send_message(query.message.chat.id, "⏳ **Progress:** 0%")
+    progress_message_id = progress_msg.id
+    chat_id = progress_msg.chat.id
+
+    # Thread-safe hook
     def hook_wrapper(d):
         asyncio.run_coroutine_threadsafe(
-            download_progress_hook(d, bot, chat_id, message_id, title, resolution),
+            download_progress_hook(d, bot, progress_message_id, chat_id),
             bot.loop
         )
 
@@ -186,20 +189,19 @@ async def yt_callback_handler(bot, query):
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'progress_hooks': [hook_wrapper],
-        'postprocessors': [{
-            'key': 'FFmpegVideoConvertor',
-            'preferedformat': 'mp4'
-        }]
+        'quiet': True,
     }
 
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:  # 👈 use yt_dlp here
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
     except Exception as e:
-        await bot.edit_message_text(chat_id, message_id, f"❌ **Error during download:** {e}")
+        await bot.edit_message_text(chat_id, progress_message_id, f"❌ Error: {e}")
         return
 
+    # Delete progress message after download completes
+    await bot.delete_messages(chat_id, progress_message_id)
 
     final_filesize = os.path.getsize(downloaded_path)
     video = VideoFileClip(downloaded_path)
