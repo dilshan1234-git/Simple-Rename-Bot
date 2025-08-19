@@ -1,6 +1,7 @@
 
 import os
 import time
+import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -125,6 +126,46 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
+import asyncio
+
+# progress hook
+def hook_wrapper(d, message, title, resolution):
+    async def update():
+        if d['status'] == 'downloading':
+            total = d.get('total_bytes') or d.get('total_bytes_estimate')
+            downloaded = d.get('downloaded_bytes', 0)
+            speed = d.get('speed', 0)
+            eta = d.get('eta', 0)
+
+            if total:
+                percent = downloaded * 100 / total
+            else:
+                percent = 0
+
+            text = (
+                f"📥 **Download started...**\n\n"
+                f"**🎞 {title}**\n\n"
+                f"**📹 {resolution}**\n\n"
+                f"⬇️ {percent:.1f}%\n"
+                f"📦 {humanbytes(downloaded)} / {humanbytes(total)}\n"
+                f"⚡ {humanbytes(speed)}/s   |   ⏳ {time.strftime('%H:%M:%S', time.gmtime(eta))}"
+            )
+            try:
+                await message.edit_text(text)
+            except:
+                pass
+
+        elif d['status'] == 'finished':
+            try:
+                await message.edit_text(
+                    f"📥 **Download finished...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+                )
+            except:
+                pass
+
+    asyncio.get_event_loop().create_task(update())
+
+
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -136,9 +177,10 @@ async def yt_callback_handler(bot, query):
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
     # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+    )
 
-    
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
@@ -146,15 +188,15 @@ async def yt_callback_handler(bot, query):
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }]
-        
+        }],
+        'progress_hooks': [lambda d: hook_wrapper(d, download_message, title, resolution)]
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
-        
+
     except Exception as e:
         await download_message.edit_text(f"❌ **Error during download:** {e}")
         return
