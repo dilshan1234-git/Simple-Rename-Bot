@@ -9,6 +9,7 @@ from main.utils import progress_message, humanbytes
 from moviepy.editor import VideoFileClip
 import ffmpeg
 import requests
+from pyrogram.errors import MessageNotModified
 
 # Temporary storage for callback query data
 callback_data_store = {}
@@ -35,8 +36,7 @@ def download_dailymotion(url):
 # Function to extract audio streams from video
 async def extract_audio(video_path, video_title, sts, bot, msg):
     extract_dir = os.path.dirname(video_path) + "/extract"
-    if not os.path.exists(extract_dir):
-        os.makedirs(extract_dir)
+    os.makedirs(extract_dir, exist_ok=True)
     
     video_streams_data = ffmpeg.probe(video_path)
     audios = []
@@ -57,7 +57,10 @@ async def extract_audio(video_path, video_title, sts, bot, msg):
 
     extracted_audio_path = f"{extract_dir}/{video_title}.mka"
     if os.path.exists(extracted_audio_path):
-        await sts.edit(f"🎧 Extracting audio from {video_title}... 🔄")
+        try:
+            await sts.edit(f"🎧 Extracting audio from {video_title}... 🔄")
+        except MessageNotModified:
+            pass
         c_time = time.time()
         await bot.send_audio(
             msg.chat.id,
@@ -100,7 +103,7 @@ def download_facebook_images(url):
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
-        'extract_flat': True,  # Extract metadata without downloading
+        'extract_flat': True,
         'skip_download': True,
     }
     with YoutubeDL(ydl_opts) as ydl:
@@ -118,7 +121,7 @@ async def dailymotion_facebook_download(bot, msg):
     if not urls:
         return await msg.reply_text("Please provide valid Dailymotion or Facebook URLs.")
     
-    # Check if the URL is a Facebook post and contains images
+    # Check for Facebook images
     if "facebook.com" in urls[0]:
         try:
             await msg.reply_text("🔄 Checking for images in the post...")
@@ -128,14 +131,13 @@ async def dailymotion_facebook_download(bot, msg):
                 for image_url in image_urls:
                     image_data = requests.get(image_url)
                     if image_data.status_code == 200:
-                        # Send the image to the chat
                         await bot.send_photo(msg.chat.id, photo=image_data.content)
             else:
                 await msg.reply_text("❌ No images found in the post.")
         except Exception as e:
             await msg.reply_text(f"❌ Failed to extract images. Error: {str(e)}")
     
-    # Proceed with video processing
+    # Ask for method
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("With Extract Audio 🎬🎧", callback_data="with_audio")],
         [InlineKeyboardButton("Only Video 🎬", callback_data="only_video")]
@@ -143,8 +145,6 @@ async def dailymotion_facebook_download(bot, msg):
     sent_message = await msg.reply("Select your method:", reply_markup=keyboard)
     callback_data_store[sent_message.id] = urls
 
-
-@Client.on_message(filters.private & filters.command("dailydl") & filters.user(ADMIN))
 
 @Client.on_callback_query(filters.regex("with_audio|only_video"))
 async def method_selection(bot, callback_query):
@@ -159,35 +159,32 @@ async def method_selection(bot, callback_query):
     await process_dailymotion_download(bot, callback_query.message, urls, method)
     del callback_data_store[message_id]
 
+
 async def process_dailymotion_download(bot, msg, urls, method):
     for url in urls:
         try:
-            # Show downloading progress text directly
             downloading_message = await msg.reply_text("📥 Starting download... 🔄")
             c_time = time.time()
 
-            # Start downloading the video
             downloaded, video_title, duration, file_size, resolution, thumbnail_url = download_dailymotion(url)
             human_size = humanbytes(file_size)
 
-            # Update the downloading progress
-            await downloading_message.edit(
-                f"📥 Downloading: {video_title}\n💽 Size: {human_size}\n📹 Resolution: {resolution}p"
-            )
+            # Update download progress safely
+            try:
+                await downloading_message.edit(
+                    f"📥 Downloading: {video_title}\n💽 Size: {human_size}\n📹 Resolution: {resolution}p"
+                )
+            except MessageNotModified:
+                pass
 
-            # Generate or download thumbnail
             thumbnail_path = download_thumbnail(thumbnail_url, video_title)
             if not thumbnail_path:
                 thumbnail_path = generate_thumbnail(downloaded)
 
-            # After download is completed, delete the downloading message
             await downloading_message.delete()
-
-            # Show new uploading progress text
             uploading_message = await msg.reply_text(f"🚀 Uploading: {video_title}... 📤")
             c_time = time.time()
 
-            # Upload the video to Telegram
             await bot.send_video(
                 msg.chat.id,
                 video=downloaded,
@@ -203,11 +200,9 @@ async def process_dailymotion_download(bot, msg, urls, method):
                 progress_args=(f"🚀 Uploading Started\n\n🎬 {video_title} 📤", uploading_message, c_time),
             )
 
-            # Extract audio if the method is "with_audio"
             if method == "with_audio":
                 await extract_audio(downloaded, video_title, uploading_message, bot, msg)
 
-            # Clean up files
             os.remove(downloaded)
             if thumbnail_path:
                 os.remove(thumbnail_path)
@@ -215,5 +210,4 @@ async def process_dailymotion_download(bot, msg, urls, method):
         except Exception as e:
             await msg.reply(f"❌ Failed to process {url}. Error: {str(e)}")
 
-    # Send final completion message
     await msg.reply_text("🎉 All URLs processed successfully!")
