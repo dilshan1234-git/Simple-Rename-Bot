@@ -126,16 +126,13 @@ async def youtube_link_handler(bot, msg):
     await msg.delete()
     await processing_message.delete()
 
-import asyncio
-
-# progress hook
 def hook_wrapper(d, message, title, resolution):
     async def update():
         if d['status'] == 'downloading':
-            total = d.get('total_bytes') or d.get('total_bytes_estimate')
+            total = d.get('total_bytes') or d.get('total_bytes_estimate') or 0
             downloaded = d.get('downloaded_bytes', 0)
-            speed = d.get('speed', 0)
-            eta = d.get('eta', 0)
+            speed = d.get('speed') or 0   # ✅ Fix: handle None
+            eta = d.get('eta') or 0       # ✅ Fix: handle None
 
             if total:
                 percent = downloaded * 100 / total
@@ -164,7 +161,6 @@ def hook_wrapper(d, message, title, resolution):
                 pass
 
     asyncio.get_event_loop().create_task(update())
-
 
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
 async def yt_callback_handler(bot, query):
