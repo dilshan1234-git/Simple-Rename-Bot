@@ -1,9 +1,8 @@
 import os
 import time
 from pyrogram import Client, filters
-from config import ADMIN, DOWNLOAD_LOCATION
-from pymediainfo import MediaInfo
-from main.utils import progress_message, humanbytes
+from config import ADMIN
+from main.utils import humanbytes
 import telegraph
 
 # Create Telegraph account
@@ -27,48 +26,34 @@ async def generate_mediainfo(bot, msg):
     # Show initial message
     sts = await msg.reply_text(f"🔄 **Processing your file...**\n\n📁 `{file_name}`")
 
-    # Download file
-    try:
-        c_time = time.time()
-        downloaded_path = await reply.download(
-            file_name=os.path.join(DOWNLOAD_LOCATION, file_name),
-            progress=progress_message,
-            progress_args=("📥 Downloading...", sts, c_time)
-        )
-    except Exception as e:
-        return await sts.edit(f"❌ Failed to download file: {e}")
-
-    if not downloaded_path or not os.path.exists(downloaded_path):
-        return await sts.edit("❌ Downloaded file path not found.")
-
-    # Parse media info
-    try:
-        media_info = MediaInfo.parse(downloaded_path)
-    except Exception as e:
-        return await sts.edit(f"❌ Failed to parse media info: {e}")
-
-    # Format content
+    # Build info sections
     def format_info(key, value, spacing=40):
         key_space = ' ' * (spacing - len(key))
         return f"{key}{key_space}: {value}\n"
 
     general_info, video_info, audio_info = "", "", ""
 
-    for track in media_info.tracks:
-        if track.track_type == "General":
-            general_info += format_info("File Name", file_name)
-            general_info += format_info("File Size", humanbytes(file_size))
-            for k, v in track.to_data().items():
-                if v:  # Avoid empty/null values
-                    general_info += format_info(k.replace("_", " ").capitalize(), v)
-        elif track.track_type == "Video":
-            for k, v in track.to_data().items():
-                if v:
-                    video_info += format_info(k.replace("_", " ").capitalize(), v)
-        elif track.track_type == "Audio":
-            for k, v in track.to_data().items():
-                if v:
-                    audio_info += format_info(k.replace("_", " ").capitalize(), v)
+    # General info (Telegram metadata)
+    general_info += format_info("File Name", file_name)
+    general_info += format_info("File Size", humanbytes(file_size))
+    general_info += format_info("Mime Type", getattr(media, "mime_type", "N/A"))
+
+    if getattr(media, "date", None):
+        general_info += format_info("Upload Date", media.date.strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Video info
+    if reply.video:
+        video_info += format_info("Duration", f"{reply.video.duration}s")
+        video_info += format_info("Width", reply.video.width)
+        video_info += format_info("Height", reply.video.height)
+        video_info += format_info("Supports Streaming", reply.video.supports_streaming)
+
+    # Audio info
+    if reply.audio:
+        audio_info += format_info("Duration", f"{reply.audio.duration}s")
+        audio_info += format_info("Performer", getattr(reply.audio, "performer", "N/A"))
+        audio_info += format_info("Title", getattr(reply.audio, "title", "N/A"))
+        audio_info += format_info("Mime Type", getattr(reply.audio, "mime_type", "N/A"))
 
     # Wrap content in HTML
     content = f"""
@@ -100,9 +85,3 @@ async def generate_mediainfo(bot, msg):
         "✅ **Info generated successfully!**",
         disable_web_page_preview=False
     )
-
-    # Clean up
-    try:
-        os.remove(downloaded_path)
-    except Exception as e:
-        print(f"⚠️ File cleanup failed: {e}")
