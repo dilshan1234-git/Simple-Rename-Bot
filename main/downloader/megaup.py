@@ -1,4 +1,4 @@
-import os, time, subprocess, json
+import os, time, subprocess, json, asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -46,14 +46,13 @@ async def mega_uploader(bot, msg):
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Show Uploading Status in Bot (Live Progress)
+    # Step 4: Show Uploading Status in Bot
     await sts.edit(f"☁️ **Uploading to Mega.nz:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 5: Upload to Mega and update progress
+    # Step 5: Upload to Mega and update progress (using JSON logs)
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", 
-        "--progress", "--stats-one-line", "--stats=1s",
-        "--log-level", "INFO",
+        "rclone", "copy", downloaded_path, "mega:",
+        "--stats=1s", "--use-json-log",
         "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
@@ -67,46 +66,37 @@ async def mega_uploader(bot, msg):
 
     c_time = time.time()
 
-    # Helper: convert "5.12 MiB" -> bytes
-    def human_to_bytes(s):
-        units = {"B":1, "KiB":1024, "MiB":1024**2, "GiB":1024**3, "TiB":1024**4}
-        num, unit = s.split()
-        return int(float(num) * units.get(unit, 1))
-
-    async def update_upload_progress(line):
-        # Example line:
-        # "Transferred:    5.123 MiB / 50.000 MiB, 10%, 1.234 MiB/s, ETA 00:40"
-        if "Transferred:" in line and "ETA" in line:
-            try:
-                parts = line.split(",")
-                done = parts[0].replace("Transferred:", "").strip().split("/")[0].strip()
-                total = parts[0].split("/")[1].strip()
-                percent = parts[1].strip().replace("%", "")
-                speed = parts[2].strip()
-                eta = parts[3].replace("ETA", "").strip()
-
-                done_bytes = human_to_bytes(done)
-                total_bytes = human_to_bytes(total)
+    async def handle_progress(data):
+        try:
+            if data.get("stats"):
+                bytes_done = data["stats"]["bytes"]
+                bytes_total = data["stats"]["totalBytes"]
+                speed = humanbytes(data["stats"].get("speed", 0)) + "/s"
+                eta = data["stats"].get("eta", 0)
+                eta_str = time.strftime("%H:%M:%S", time.gmtime(eta)) if eta else "N/A"
 
                 await progress_message(
                     f"☁️ **Uploading to Mega.nz:** **`{filename}`**",
                     sts,
                     c_time,
-                    done_bytes,
-                    total_bytes,
+                    bytes_done,
+                    bytes_total,
                     speed,
-                    eta
+                    eta_str
                 )
-            except Exception as e:
-                print("Parse error:", e)
+        except Exception as e:
+            print("Progress parse error:", e)
 
-    # Stream lines from rclone
+    loop = asyncio.get_event_loop()
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        print(line.strip())
-        await update_upload_progress(line)
+        try:
+            data = json.loads(line.strip())
+            loop.create_task(handle_progress(data))
+        except:
+            print(line.strip())
 
     proc.wait()
 
