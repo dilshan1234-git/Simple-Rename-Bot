@@ -46,30 +46,67 @@ async def mega_uploader(bot, msg):
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Show Uploading Status in Bot (Static)
-    await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+    # Step 4: Show Uploading Status in Bot (Live Progress)
+    await sts.edit(f"☁️ **Uploading to Mega.nz:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 5: Upload to Mega and stream output to Colab logs
+    # Step 5: Upload to Mega and update progress
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
+        "rclone", "copy", downloaded_path, "mega:", 
+        "--progress", "--stats-one-line", "--stats=1s",
+        "--log-level", "INFO",
+        "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
-
-    print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
+        bufsize=1
     )
 
-    # Print rclone progress in Colab logs
+    c_time = time.time()
+
+    # Helper: convert "5.12 MiB" -> bytes
+    def human_to_bytes(s):
+        units = {"B":1, "KiB":1024, "MiB":1024**2, "GiB":1024**3, "TiB":1024**4}
+        num, unit = s.split()
+        return int(float(num) * units.get(unit, 1))
+
+    async def update_upload_progress(line):
+        # Example line:
+        # "Transferred:    5.123 MiB / 50.000 MiB, 10%, 1.234 MiB/s, ETA 00:40"
+        if "Transferred:" in line and "ETA" in line:
+            try:
+                parts = line.split(",")
+                done = parts[0].replace("Transferred:", "").strip().split("/")[0].strip()
+                total = parts[0].split("/")[1].strip()
+                percent = parts[1].strip().replace("%", "")
+                speed = parts[2].strip()
+                eta = parts[3].replace("ETA", "").strip()
+
+                done_bytes = human_to_bytes(done)
+                total_bytes = human_to_bytes(total)
+
+                await progress_message(
+                    f"☁️ **Uploading to Mega.nz:** **`{filename}`**",
+                    sts,
+                    c_time,
+                    done_bytes,
+                    total_bytes,
+                    speed,
+                    eta
+                )
+            except Exception as e:
+                print("Parse error:", e)
+
+    # Stream lines from rclone
     while True:
         line = proc.stdout.readline()
         if not line:
             break
         print(line.strip())
+        await update_upload_progress(line)
 
     proc.wait()
 
