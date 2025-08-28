@@ -65,25 +65,27 @@ async def mega_uploader(bot, msg):
     )
 
     c_time = time.time()
+    last_text = None  # to prevent MessageNotModified
 
     async def handle_progress(data):
+        nonlocal last_text
         try:
             if data.get("stats"):
-                bytes_done = data["stats"]["bytes"]
-                bytes_total = data["stats"]["totalBytes"]
-                speed = humanbytes(data["stats"].get("speed", 0)) + "/s"
-                eta = data["stats"].get("eta", 0)
-                eta_str = time.strftime("%H:%M:%S", time.gmtime(eta)) if eta else "N/A"
+                bytes_done = data["stats"].get("bytes", 0)
+                bytes_total = data["stats"].get("totalBytes", 0)
 
-                await progress_message(
+                # Use same progress style as download
+                text = await progress_message(
                     f"☁️ **Uploading to Mega.nz:** **`{filename}`**",
                     sts,
                     c_time,
                     bytes_done,
-                    bytes_total,
-                    speed,
-                    eta_str
+                    bytes_total
                 )
+
+                # progress_message may return text it just sent
+                if text and text != last_text:
+                    last_text = text
         except Exception as e:
             print("Progress parse error:", e)
 
@@ -142,7 +144,10 @@ async def mega_uploader(bot, msg):
         [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
     ])
 
-    await sts.edit(final_text, reply_markup=btn)
+    try:
+        await sts.edit(final_text, reply_markup=btn)
+    except:
+        await msg.reply(final_text, reply_markup=btn)
 
     # Step 8: Cleanup
     try:
