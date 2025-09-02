@@ -65,11 +65,10 @@ async def subtitle_receive(bot, msg):
     chat_id = msg.chat.id
     sub = msg.document
     if not sub:
-        return  # guard (filter already checks)
+        return
 
     MERGE_STATE[chat_id]["subtitle_msg"] = msg
 
-    # Build confirm UI with unique callback data
     media_msg = MERGE_STATE[chat_id]["media_msg"]
     video_name = media_msg.video.file_name if media_msg.video else media_msg.document.file_name
 
@@ -95,7 +94,6 @@ async def merge_cb(bot, query: CallbackQuery):
     action, chat_id_str = query.data.split(":")
     chat_id = int(chat_id_str)
 
-    # Ensure this callback belongs to this chat/session
     if query.message.chat.id != chat_id or chat_id not in MERGE_STATE:
         return await query.answer("Session not found / expired.", show_alert=True)
 
@@ -132,24 +130,17 @@ async def merge_cb(bot, query: CallbackQuery):
 
     await query.message.edit("✅ Downloaded.\n⚙️ Processing...")
 
-    # Decide output path and subtitle codec
     base, ext = os.path.splitext(main_path)
     output_path = f"{base}_merged{ext}"
 
-    # Choose subtitle codec based on container (keep it simple & robust)
-    # - mp4: mov_text
-    # - mkv/others: srt (works for external .srt; .ass will be re-encoded to 'ass')
     container = ext.lower()
     sub_ext = os.path.splitext(sub_path)[1].lower()
 
     if container == ".mp4":
         sub_codec = "mov_text"
     else:
-        # pick a sane default for muxing external subs into MKV/others
         sub_codec = "ass" if sub_ext == ".ass" else "srt"
 
-    # Build ffmpeg command (soft-sub, selectable)
-    # Keep streams intact; add subtitle as a new stream
     cmd = [
         "ffmpeg", "-y",
         "-i", main_path, "-i", sub_path,
@@ -159,38 +150,49 @@ async def merge_cb(bot, query: CallbackQuery):
         output_path
     ]
 
-    # Run ffmpeg
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _, err = await proc.communicate()
     if proc.returncode != 0:
-        # Show a short error (avoid flooding the chat)
         short_err = err.decode(errors="ignore").splitlines()[-10:]
         return await query.message.edit("❌ Failed during merging.\n" + "```\n" + "\n".join(short_err) + "\n```")
 
+    # Generate thumbnail
+    thumb_path = f"{base}_thumb.jpg"
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-i", output_path, "-ss", "00:00:02", "-vframes", "1", thumb_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+        if not os.path.exists(thumb_path):
+            thumb_path = None
+    except Exception:
+        thumb_path = None
+
     await query.message.edit("✅ Processed.\n📤 Uploading...")
 
-    # Upload back: if original was Telegram video → send_video; else send_document
     c_time = time.time()
     try:
-        if media_msg.video:
-            await bot.send_video(
-                chat_id,
-                video=output_path,
-                caption="✅ Processed File (subtitle track added)",
-                progress=progress_message,
-                progress_args=("Uploading...", query.message, c_time)
-            )
-        else:
-            await bot.send_document(
-                chat_id,
-                document=output_path,
-                caption="✅ Processed File (subtitle track added)",
-                progress=progress_message,
-                progress_args=("Uploading...", query.message, c_time)
-            )
+        await bot.send_video(
+            chat_id,
+            video=output_path,
+            caption=os.path.basename(output_path),  # only filename
+            thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
+            progress=progress_message,
+            progress_args=("Uploading...", query.message, c_time)
+        )
     except Exception as e:
         return await query.message.edit(f"❌ Upload failed: `{e}`")
 
-    # Do not delete outputs (keep on Colab as you wanted)
+    # Keep processed video in Colab, but cleanup temp subtitle & thumbnail
+    try:
+        if os.path.exists(sub_path):
+            os.remove(sub_path)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
+        if os.path.exists(main_path):
+            os.remove(main_path)
+    except:
+        pass
+
     await query.message.delete()
     MERGE_STATE.pop(chat_id, None)
