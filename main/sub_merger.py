@@ -1,11 +1,10 @@
-import os, time, asyncio, subprocess
+import os, time, subprocess
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
-# Store per-user merge session data
-merge_data = {}
+merge_data = {}  # Store session data
 
 
 # ───────────────────────────────
@@ -19,31 +18,31 @@ async def ask_for_subtitle(bot, msg):
 
     media = reply.video or reply.document or reply.audio
     file_size = humanbytes(media.file_size)
+
     sts = await msg.reply_text("⏳ Fetching file info...")
 
     # Download the main file
-    file_path = await reply.download(file_name=os.path.join(DOWNLOAD_LOCATION, media.file_name))
-
-    # Default values
-    duration = 0
-
-    # Use ffprobe if it's video/audio
     try:
-        if reply.video or reply.audio:
+        file_path = await reply.download(file_name=os.path.join(DOWNLOAD_LOCATION, media.file_name))
+    except Exception as e:
+        return await sts.edit(f"❌ Download failed: {e}")
+
+    duration = 0
+    if reply.video or reply.audio:
+        try:
             cmd = [
                 "ffprobe", "-v", "error", "-show_entries",
                 "format=duration", "-of", "default=noprint_wrappers=1:nokey=1",
                 file_path
             ]
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            out, _ = await proc.communicate()
-            duration = int(float(out.strip())) if out else 0
-    except Exception:
-        duration = 0
+            result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            if result.stdout.strip():
+                duration = int(float(result.stdout.strip()))
+        except Exception as e:
+            print("FFPROBE ERROR:", e)
+            duration = 0
 
-    # Save session data
+    # Save session
     merge_data[msg.from_user.id] = {
         "media_msg": reply,
         "file_name": media.file_name,
@@ -53,14 +52,12 @@ async def ask_for_subtitle(bot, msg):
         "subtitle_file": None
     }
 
-    await sts.delete()
-    text = (
+    await sts.edit(
         f"📂 **File Selected:** `{media.file_name}`\n"
         f"💽 **Size:** {file_size}\n"
         f"🕒 **Duration:** {duration} sec\n\n"
         f"📥 Now send me your subtitle file (any format/extension)"
     )
-    await msg.reply_text(text)
 
 
 # ───────────────────────────────
@@ -70,11 +67,14 @@ async def ask_for_subtitle(bot, msg):
 async def get_subtitle(bot, msg):
     user_id = msg.from_user.id
     if user_id not in merge_data:
-        return  # ignore if no /merge session active
+        return  # ignore stray files
 
     subtitle = msg.document
     sub_path = os.path.join(DOWNLOAD_LOCATION, subtitle.file_name)
-    await msg.download(file_name=sub_path)
+    try:
+        await msg.download(file_name=sub_path)
+    except Exception as e:
+        return await msg.reply_text(f"❌ Subtitle download failed: {e}")
 
     merge_data[user_id]["subtitle_file"] = sub_path
 
@@ -126,14 +126,19 @@ async def merge_process(bot, query: CallbackQuery):
     )
     c_time = time.time()
 
-    # Merge with ffmpeg (soft-sub)
-    cmd = [
-        "ffmpeg", "-y", "-i", input_file, "-i", subtitle_file,
-        "-c", "copy", "-c:s", "mov_text",  # keep main streams intact, add subtitle
-        "-map", "0", "-map", "1", output_path
-    ]
-    process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    await process.communicate()
+    # ffmpeg merge (soft-sub)
+    try:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_file, "-i", subtitle_file,
+            "-c", "copy", "-c:s", "mov_text",
+            "-map", "0", "-map", "1", output_path
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            print("FFMPEG ERROR:", result.stderr)
+            return await sts.edit("❌ Failed during merging.")
+    except Exception as e:
+        return await sts.edit(f"❌ Merge failed: {e}")
 
     await sts.edit("✅ Processing done!\n🚀 Now uploading...")
 
@@ -147,7 +152,7 @@ async def merge_process(bot, query: CallbackQuery):
                 progress=progress_message,
                 progress_args=("Uploading...", sts, c_time)
             )
-        else:  # send other files as document
+        else:  # send as document
             await bot.send_document(
                 chat_id=query.message.chat.id,
                 document=output_path,
@@ -159,4 +164,4 @@ async def merge_process(bot, query: CallbackQuery):
         return await sts.edit(f"❌ Upload failed: {e}")
 
     await sts.delete()
-    # ⚠️ Do NOT delete files (keep in Colab as requested)
+    # ⚠️ Files are not deleted (Colab keeps them)
