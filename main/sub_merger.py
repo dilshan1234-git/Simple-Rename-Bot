@@ -3,126 +3,194 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
+from pyrogram.filters import create
 
-# Store temp data
-MERGE_DATA = {}
+# ─────────────────────────
+# Session store (per chat)
+# ─────────────────────────
+MERGE_STATE = {}  # { chat_id: { "media_msg": Message, "stage": "await_sub", "subtitle_msg": Message | None } }
 
+os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
+
+# Custom filter: only accept a subtitle document while we are waiting for it
+def _awaiting_subtitle(_, __, msg):
+    try:
+        return (
+            msg.chat
+            and msg.chat.id in MERGE_STATE
+            and MERGE_STATE[msg.chat.id].get("stage") == "await_sub"
+            and msg.document is not None
+        )
+    except Exception:
+        return False
+
+awaiting_subtitle = create(_awaiting_subtitle)
+
+
+# ─────────────────────────
+# Step 1: /merge (must reply to a video or document)
+# ─────────────────────────
 @Client.on_message(filters.private & filters.command("merge") & filters.user(ADMIN))
 async def merge_start(bot, msg):
     reply = msg.reply_to_message
     if not reply:
-        return await msg.reply_text("Please reply to a video/document with `/merge` command.")
+        return await msg.reply_text("⚠️ Please *reply* to a **video or document** with `/merge`.")
 
-    media = reply.document or reply.video
+    media = reply.video or reply.document
     if not media:
-        return await msg.reply_text("Please reply to a valid video/document file.")
+        return await msg.reply_text("⚠️ Unsupported message. Reply to a **video/document** and use `/merge`.")
 
-    file_name = media.file_name
-    file_size = humanbytes(media.file_size)
-    duration = getattr(media, "duration", None)
+    MERGE_STATE[msg.chat.id] = {"media_msg": reply, "stage": "await_sub", "subtitle_msg": None}
 
-    txt = f"**🎬 File Name:** `{file_name}`\n" \
-          f"**💽 Size:** `{file_size}`\n"
-    if duration:
-        txt += f"**🕒 Duration:** `{duration} sec`\n"
-    txt += "\n📩 Now send me your subtitle file (e.g. .srt, .ass)."
+    filename = media.file_name or "unnamed"
+    filesize = humanbytes(media.file_size)
+    dur = getattr(media, "duration", None)
+    dur_text = f"\n🕒 Duration: `{dur} sec`" if dur else ""
 
-    MERGE_DATA[msg.chat.id] = {"video_msg": reply}
-    await msg.reply_text(txt)
+    await msg.reply_text(
+        f"🎬 **File Selected**\n\n"
+        f"📂 File: `{filename}`\n"
+        f"💾 Size: `{filesize}`{dur_text}\n\n"
+        f"📑 Now send your **subtitle file** here (e.g. `.srt`, `.ass`, `.vtt`).",
+        quote=True,
+        disable_web_page_preview=True
+    )
 
 
-@Client.on_message(filters.private & filters.user(ADMIN))
+# ─────────────────────────
+# Step 2: receive subtitle (only when session active)
+# ─────────────────────────
+@Client.on_message(filters.private & awaiting_subtitle & filters.user(ADMIN))
 async def subtitle_receive(bot, msg):
-    if msg.chat.id not in MERGE_DATA:
+    chat_id = msg.chat.id
+    sub = msg.document
+    if not sub:
+        return  # guard (filter already checks)
+
+    MERGE_STATE[chat_id]["subtitle_msg"] = msg
+
+    # Build confirm UI with unique callback data
+    media_msg = MERGE_STATE[chat_id]["media_msg"]
+    video_name = media_msg.video.file_name if media_msg.video else media_msg.document.file_name
+
+    await msg.reply_text(
+        f"✅ **Files Ready**\n\n"
+        f"🎬 Main: `{video_name}`\n"
+        f"📄 Subtitle: `{sub.file_name}`\n\n"
+        f"Proceed to merge?",
+        reply_markup=InlineKeyboardMarkup(
+            [[
+                InlineKeyboardButton("✅ Confirm", callback_data=f"sm_confirm:{chat_id}"),
+                InlineKeyboardButton("❌ Cancel",  callback_data=f"sm_cancel:{chat_id}")
+            ]]
+        )
+    )
+
+
+# ─────────────────────────
+# Step 3: callbacks (unique sm_ prefix)
+# ─────────────────────────
+@Client.on_callback_query(filters.regex(r"^sm_(confirm|cancel):(-?\d+)$") & filters.user(ADMIN))
+async def merge_cb(bot, query: CallbackQuery):
+    action, chat_id_str = query.data.split(":")
+    chat_id = int(chat_id_str)
+
+    # Ensure this callback belongs to this chat/session
+    if query.message.chat.id != chat_id or chat_id not in MERGE_STATE:
+        return await query.answer("Session not found / expired.", show_alert=True)
+
+    if action == "sm_cancel":
+        MERGE_STATE.pop(chat_id, None)
+        await query.message.edit("❌ Merge cancelled.")
         return
-    if not msg.document:
-        return await msg.reply_text("Please send me a valid subtitle file (.srt/.ass).")
 
-    sub_file = msg.document.file_name
-    MERGE_DATA[msg.chat.id]["subtitle_msg"] = msg
+    # sm_confirm
+    data = MERGE_STATE[chat_id]
+    media_msg = data["media_msg"]
+    sub_msg = data["subtitle_msg"]
+    if not sub_msg:
+        return await query.message.edit("⚠️ No subtitle attached. Send a subtitle file first.")
 
-    video_name = MERGE_DATA[msg.chat.id]["video_msg"].document.file_name if MERGE_DATA[msg.chat.id]["video_msg"].document else MERGE_DATA[msg.chat.id]["video_msg"].video.file_name
+    await query.message.edit("⏳ Downloading files...")
 
-    txt = f"**🎬 Video File:** `{video_name}`\n" \
-          f"**📄 Subtitle File:** `{sub_file}`\n\n✅ Do you want to continue?"
+    # Download main file
+    c_time = time.time()
+    main_name = media_msg.video.file_name if media_msg.video else media_msg.document.file_name
+    main_path = await media_msg.download(
+        file_name=os.path.join(DOWNLOAD_LOCATION, main_name),
+        progress=progress_message,
+        progress_args=("📥 Downloading main file...", query.message, c_time)
+    )
 
-    buttons = [[
-        InlineKeyboardButton("✅ Confirm", callback_data="merge_confirm"),
-        InlineKeyboardButton("❌ Cancel", callback_data="merge_cancel")
-    ]]
+    # Download subtitle
+    sub_name = sub_msg.document.file_name
+    sub_path = await sub_msg.download(
+        file_name=os.path.join(DOWNLOAD_LOCATION, sub_name),
+        progress=progress_message,
+        progress_args=("📥 Downloading subtitle...", query.message, c_time)
+    )
 
-    await msg.reply_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
+    await query.message.edit("✅ Downloaded.\n⚙️ Processing...")
 
+    # Decide output path and subtitle codec
+    base, ext = os.path.splitext(main_path)
+    output_path = f"{base}_merged{ext}"
 
-@Client.on_callback_query(filters.regex("merge_"))
-async def merge_callback(bot, query: CallbackQuery):
-    data = query.data
-    chat_id = query.message.chat.id
-    user_data = MERGE_DATA.get(chat_id)
+    # Choose subtitle codec based on container (keep it simple & robust)
+    # - mp4: mov_text
+    # - mkv/others: srt (works for external .srt; .ass will be re-encoded to 'ass')
+    container = ext.lower()
+    sub_ext = os.path.splitext(sub_path)[1].lower()
 
-    if not user_data:
-        return await query.message.edit("Session expired. Please try again.")
+    if container == ".mp4":
+        sub_codec = "mov_text"
+    else:
+        # pick a sane default for muxing external subs into MKV/others
+        sub_codec = "ass" if sub_ext == ".ass" else "srt"
 
-    if data == "merge_cancel":
-        MERGE_DATA.pop(chat_id, None)
-        return await query.message.edit("❌ Merge cancelled.")
+    # Build ffmpeg command (soft-sub, selectable)
+    # Keep streams intact; add subtitle as a new stream
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", main_path, "-i", sub_path,
+        "-c", "copy", "-c:s", sub_codec,
+        "-map", "0", "-map", "1",
+        "-disposition:s:0", "default",
+        output_path
+    ]
 
-    if data == "merge_confirm":
-        await query.message.delete()
-        video_msg = user_data["video_msg"]
-        sub_msg = user_data["subtitle_msg"]
+    # Run ffmpeg
+    proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    _, err = await proc.communicate()
+    if proc.returncode != 0:
+        # Show a short error (avoid flooding the chat)
+        short_err = err.decode(errors="ignore").splitlines()[-10:]
+        return await query.message.edit("❌ Failed during merging.\n" + "```\n" + "\n".join(short_err) + "\n```")
 
-        sts = await bot.send_message(chat_id, "⏳ Downloading video...")
-        c_time = time.time()
+    await query.message.edit("✅ Processed.\n📤 Uploading...")
 
-        video_path = await video_msg.download(
-            file_name=video_msg.document.file_name if video_msg.document else video_msg.video.file_name,
-            progress=progress_message,
-            progress_args=("Downloading video...", sts, c_time)
-        )
-        await sts.edit("✅ Video downloaded.\n⏳ Downloading subtitle...")
+    # Upload back: if original was Telegram video → send_video; else send_document
+    c_time = time.time()
+    try:
+        if media_msg.video:
+            await bot.send_video(
+                chat_id,
+                video=output_path,
+                caption="✅ Processed File (subtitle track added)",
+                progress=progress_message,
+                progress_args=("Uploading...", query.message, c_time)
+            )
+        else:
+            await bot.send_document(
+                chat_id,
+                document=output_path,
+                caption="✅ Processed File (subtitle track added)",
+                progress=progress_message,
+                progress_args=("Uploading...", query.message, c_time)
+            )
+    except Exception as e:
+        return await query.message.edit(f"❌ Upload failed: `{e}`")
 
-        subtitle_path = await sub_msg.download(
-            file_name=sub_msg.document.file_name,
-            progress=progress_message,
-            progress_args=("Downloading subtitle...", sts, c_time)
-        )
-
-        await sts.edit("✅ Subtitle downloaded.\n⚙️ Processing...")
-
-        base, ext = os.path.splitext(video_path)
-        output_file = base + "_merged" + ext
-
-        # Merge using ffmpeg
-        cmd = [
-            "ffmpeg", "-i", video_path, "-i", subtitle_path,
-            "-c", "copy", "-c:s", "srt",
-            output_file, "-y"
-        ]
-        process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        await process.communicate()
-
-        await sts.edit("✅ Processing done.\n📤 Uploading...")
-
-        c_time = time.time()
-        try:
-            if video_msg.document:
-                await bot.send_document(
-                    chat_id, document=output_file,
-                    caption="✅ Processed File",
-                    progress=progress_message,
-                    progress_args=("Uploading...", sts, c_time)
-                )
-            else:
-                await bot.send_video(
-                    chat_id, video=output_file,
-                    caption="✅ Processed File",
-                    progress=progress_message,
-                    progress_args=("Uploading...", sts, c_time)
-                )
-        except Exception as e:
-            await sts.edit(f"❌ Upload failed: {e}")
-            return
-
-        await sts.delete()
-        MERGE_DATA.pop(chat_id, None)
+    # Do not delete outputs (keep on Colab as you wanted)
+    await query.message.delete()
+    MERGE_STATE.pop(chat_id, None)
