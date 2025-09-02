@@ -5,39 +5,47 @@ from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 from moviepy.editor import VideoFileClip
 
-# Temporary storage
+# Temporary store
 merge_data = {}
 
 @Client.on_message(filters.private & filters.command("merge") & filters.user(ADMIN))
 async def ask_for_subtitle(bot, msg):
     reply = msg.reply_to_message
-    if not reply or not reply.video:
-        return await msg.reply_text("❌ Please reply to a video file with `/merge` to continue.")
+    if not reply or not (reply.video or reply.document or reply.audio):
+        return await msg.reply_text("❌ Please reply to a video/file with `/merge`.")
 
-    video = reply.video
-    file_size = humanbytes(video.file_size)
+    media = reply.video or reply.document or reply.audio
+    file_size = humanbytes(media.file_size)
+    sts = await msg.reply_text("⏳ Fetching file info...")
 
-    # Get duration
-    sts = await msg.reply_text("⏳ Fetching video info...")
-    video_clip = VideoFileClip(await reply.download(file_name=os.path.join(DOWNLOAD_LOCATION, video.file_name)))
-    duration = int(video_clip.duration)
-    video_clip.close()
+    # Download original file
+    file_path = await reply.download(file_name=os.path.join(DOWNLOAD_LOCATION, media.file_name))
+
+    # Try to get duration if it's a video/audio
+    duration = 0
+    if reply.video or reply.audio:
+        try:
+            clip = VideoFileClip(file_path)
+            duration = int(clip.duration)
+            clip.close()
+        except:
+            duration = 0
 
     merge_data[msg.from_user.id] = {
-        "video_msg": reply,
-        "video_file": video.file_name,
-        "video_size": file_size,
+        "media_msg": reply,
+        "file_name": media.file_name,
+        "file_size": file_size,
         "duration": duration,
-        "video_path": os.path.join(DOWNLOAD_LOCATION, video.file_name),
+        "file_path": file_path,
         "subtitle_file": None
     }
 
     await sts.delete()
     text = (
-        f"🎬 **Video Selected:** `{video.file_name}`\n"
+        f"📂 **File Selected:** `{media.file_name}`\n"
         f"💽 **Size:** {file_size}\n"
         f"🕒 **Duration:** {duration} sec\n\n"
-        f"📥 Now send me your subtitle file (e.g. `.srt`, `.ass`, `.vtt`)"
+        f"📥 Now send me your subtitle file (any format/extension)"
     )
     await msg.reply_text(text)
 
@@ -46,29 +54,24 @@ async def ask_for_subtitle(bot, msg):
 async def get_subtitle(bot, msg):
     user_id = msg.from_user.id
     if user_id not in merge_data:
-        return  # ignore if no /merge before
+        return
 
     subtitle = msg.document
-    sub_ext = os.path.splitext(subtitle.file_name)[1].lower()
-    if sub_ext not in [".srt", ".ass", ".vtt"]:
-        return await msg.reply_text("❌ Unsupported subtitle format. Use `.srt`, `.ass`, or `.vtt`.")
-
-    # Download subtitle
     sub_path = os.path.join(DOWNLOAD_LOCATION, subtitle.file_name)
     await msg.download(file_name=sub_path)
 
     merge_data[user_id]["subtitle_file"] = sub_path
 
-    video_name = merge_data[user_id]["video_file"]
-    file_size = merge_data[user_id]["video_size"]
+    main_file = merge_data[user_id]["file_name"]
+    file_size = merge_data[user_id]["file_size"]
     duration = merge_data[user_id]["duration"]
 
     text = (
-        f"🎬 **Video:** `{video_name}`\n"
+        f"📂 **Main File:** `{main_file}`\n"
         f"💽 **Size:** {file_size}\n"
         f"🕒 **Duration:** {duration} sec\n\n"
-        f"📄 **Subtitle:** `{subtitle.file_name}`\n\n"
-        "✅ Do you want to merge this subtitle into the video?"
+        f"📄 **Subtitle/File:** `{subtitle.file_name}`\n\n"
+        "✅ Do you want to merge this into the file?"
     )
 
     buttons = [
@@ -89,32 +92,25 @@ async def merge_process(bot, query: CallbackQuery):
     if action == "cancel":
         merge_data.pop(user_id, None)
         await query.message.delete()
-        return await query.message.reply_text("❌ Merge process cancelled.")
+        return await query.message.reply_text("❌ Merge cancelled.")
 
     data = merge_data.get(user_id)
     if not data:
         return await query.message.edit("❌ Data expired, start again with /merge.")
 
-    video_path = data["video_path"]
-    subtitle_path = data["subtitle_file"]
-    output_path = os.path.join(DOWNLOAD_LOCATION, f"processed_{data['video_file']}")
+    input_file = data["file_path"]
+    subtitle_file = data["subtitle_file"]
+    output_path = os.path.join(DOWNLOAD_LOCATION, f"processed_{data['file_name']}")
 
-    # Start download + process simulation
-    sts = await query.message.edit(f"📥 Downloading **{data['video_file']}** ...")
+    sts = await query.message.edit(f"📥 Download complete!\n⚙️ Now merging `{os.path.basename(subtitle_file)}` ...")
     c_time = time.time()
-
-    # Already downloaded in first step, so skip actual download
-    await asyncio.sleep(1)
-
-    await sts.edit("✅ Download complete!\n⚙️ Now merging subtitles...")
 
     # Merge with ffmpeg (soft-sub)
     cmd = [
-        "ffmpeg", "-y", "-i", video_path, "-i", subtitle_path,
-        "-c", "copy", "-c:s", "mov_text",  # keep streams intact
+        "ffmpeg", "-y", "-i", input_file, "-i", subtitle_file,
+        "-c", "copy", "-c:s", "mov_text",
         "-map", "0", "-map", "1", output_path
     ]
-
     process = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     await process.communicate()
 
@@ -133,6 +129,4 @@ async def merge_process(bot, query: CallbackQuery):
         return await sts.edit(f"❌ Upload failed: {e}")
 
     await sts.delete()
-    # Don't delete files (as per request)
-
-
+    # keep files on Colab
