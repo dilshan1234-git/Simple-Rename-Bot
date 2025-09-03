@@ -134,31 +134,22 @@ async def merge_cb(bot, query: CallbackQuery):
     base_name, ext = os.path.splitext(os.path.basename(main_path))
     output_path = os.path.join(DOWNLOAD_LOCATION, f"{base_name}_merged{ext}")
 
-    container = ext.lower()
     sub_ext = os.path.splitext(sub_path)[1].lower()
+    new_sub_codec = "ass" if sub_ext in [".srt", ".vtt"] else sub_ext.replace(".", "")
 
-    # Decide subtitle codec
-    if container == ".mp4":
-        sub_codec = "mov_text"
-    elif sub_ext == ".ass":
-        sub_codec = "ass"
-    elif sub_ext in [".srt", ".vtt"]:
-        sub_codec = "srt"   # force re-encode to avoid "dimensions not set"
-    else:
-        sub_codec = "ass"   # fallback
-
-    # ffmpeg command → keep ALL streams from main, add new subtitle safely
+    # FFmpeg command → keep all existing streams, add new subtitle safely
     cmd = [
         "ffmpeg", "-y",
-        "-i", main_path, "-i", sub_path,
-        "-map", "0",           # keep all video/audio/subs/chapters
-        "-map", "1:0",         # add only the new subtitle
+        "-i", main_path,
+        "-i", sub_path,
+        "-map", "0",              # all streams from main (video, audio, subs, chapters, attachments)
+        "-map", "1:0",            # only the new subtitle
         "-c:v", "copy",
         "-c:a", "copy",
-        "-c:s", sub_codec,     # re-encode subtitle only
-        "-c:d", "copy",        # keep chapters/attachments
-        "-max_interleave_delta", "0",
-        "-disposition:s", "default",
+        "-c:s:0", "copy",         # existing subtitles
+        "-c:s:1", new_sub_codec,  # new subtitle
+        "-disposition:s:1", "default",  # set new subtitle as default
+        "-c:d", "copy",           # keep chapters/attachments
         output_path
     ]
 
@@ -187,7 +178,7 @@ async def merge_cb(bot, query: CallbackQuery):
         await bot.send_video(
             chat_id,
             video=output_path,
-            caption=f"🎬 Processed File\n`{os.path.basename(output_path)}`",
+            caption=os.path.basename(output_path),
             thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
             progress=progress_message,
             progress_args=("Uploading...", query.message, c_time)
@@ -203,7 +194,7 @@ async def merge_cb(bot, query: CallbackQuery):
             os.remove(thumb_path)
         if os.path.exists(main_path):
             os.remove(main_path)
-        # keep output_path permanently
+        # ❌ keep output_path permanently
     except:
         pass
 
