@@ -130,8 +130,9 @@ async def merge_cb(bot, query: CallbackQuery):
 
     await query.message.edit("✅ Downloaded.\n⚙️ Processing...")
 
-    base, ext = os.path.splitext(main_path)
-    output_path = f"{base}_merged{ext}"
+    # Build output path in same folder as main file
+    base_name, ext = os.path.splitext(os.path.basename(main_path))
+    output_path = os.path.join(DOWNLOAD_LOCATION, f"{base_name}_merged{ext}")
 
     container = ext.lower()
     sub_ext = os.path.splitext(sub_path)[1].lower()
@@ -161,7 +162,7 @@ async def merge_cb(bot, query: CallbackQuery):
         return await query.message.edit("❌ Failed during merging.\n" + "```\n" + "\n".join(short_err) + "\n```")
 
     # Generate thumbnail
-    thumb_path = f"{base}_thumb.jpg"
+    thumb_path = os.path.join(DOWNLOAD_LOCATION, f"{base_name}_thumb.jpg")
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", output_path, "-ss", "00:00:02", "-vframes", "1", thumb_path],
@@ -187,7 +188,7 @@ async def merge_cb(bot, query: CallbackQuery):
     except Exception as e:
         return await query.message.edit(f"❌ Upload failed: `{e}`")
 
-    # Keep processed video in Colab, but cleanup temp subtitle & thumbnail & main
+    # Cleanup → keep processed video in Colab
     try:
         if os.path.exists(sub_path):
             os.remove(sub_path)
@@ -195,6 +196,7 @@ async def merge_cb(bot, query: CallbackQuery):
             os.remove(thumb_path)
         if os.path.exists(main_path):
             os.remove(main_path)
+        # ❌ keep output_path permanently for reuse
     except:
         pass
 
