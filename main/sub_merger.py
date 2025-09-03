@@ -142,15 +142,16 @@ async def merge_cb(bot, query: CallbackQuery):
     else:
         sub_codec = "srt" if sub_ext in [".srt", ".vtt"] else "ass"
 
-    # ffmpeg command → keep all streams from main file, add new subtitle
+    # ffmpeg command → keep ALL streams from main, add new subtitle safely
     cmd = [
         "ffmpeg", "-y",
         "-i", main_path, "-i", sub_path,
-        "-map", "0",           # keep everything from main (video, audio, old subs)
-        "-map", "1:0",         # add only the new subtitle
+        "-map", "0",           # all streams (video, audio, existing subs, chapters, attachments)
+        "-map", "1:0",         # only the new subtitle
         "-c:v", "copy",
         "-c:a", "copy",
         "-c:s", sub_codec,
+        "-c:d", "copy",        # data streams (chapters/attachments)
         "-disposition:s:0", "default",
         output_path
     ]
@@ -158,7 +159,7 @@ async def merge_cb(bot, query: CallbackQuery):
     proc = await asyncio.create_subprocess_exec(*cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     _, err = await proc.communicate()
     if proc.returncode != 0:
-        short_err = err.decode(errors="ignore").splitlines()[-10:]
+        short_err = err.decode(errors="ignore").splitlines()[-15:]
         return await query.message.edit("❌ Failed during merging.\n" + "```\n" + "\n".join(short_err) + "\n```")
 
     # Generate thumbnail
@@ -196,7 +197,7 @@ async def merge_cb(bot, query: CallbackQuery):
             os.remove(thumb_path)
         if os.path.exists(main_path):
             os.remove(main_path)
-        # ❌ keep output_path permanently for reuse
+        # keep output_path permanently
     except:
         pass
 
