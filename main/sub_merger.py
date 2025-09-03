@@ -137,22 +137,28 @@ async def merge_cb(bot, query: CallbackQuery):
     container = ext.lower()
     sub_ext = os.path.splitext(sub_path)[1].lower()
 
+    # Decide subtitle codec
     if container == ".mp4":
         sub_codec = "mov_text"
+    elif sub_ext == ".ass":
+        sub_codec = "ass"
+    elif sub_ext in [".srt", ".vtt"]:
+        sub_codec = "srt"   # force re-encode to avoid "dimensions not set"
     else:
-        sub_codec = "srt" if sub_ext in [".srt", ".vtt"] else "ass"
+        sub_codec = "ass"   # fallback
 
     # ffmpeg command → keep ALL streams from main, add new subtitle safely
     cmd = [
         "ffmpeg", "-y",
         "-i", main_path, "-i", sub_path,
-        "-map", "0",           # all streams (video, audio, existing subs, chapters, attachments)
-        "-map", "1:0",         # only the new subtitle
+        "-map", "0",           # keep all video/audio/subs/chapters
+        "-map", "1:0",         # add only the new subtitle
         "-c:v", "copy",
         "-c:a", "copy",
-        "-c:s", sub_codec,
-        "-c:d", "copy",        # data streams (chapters/attachments)
-        "-disposition:s:0", "default",
+        "-c:s", sub_codec,     # re-encode subtitle only
+        "-c:d", "copy",        # keep chapters/attachments
+        "-max_interleave_delta", "0",
+        "-disposition:s", "default",
         output_path
     ]
 
@@ -181,7 +187,7 @@ async def merge_cb(bot, query: CallbackQuery):
         await bot.send_video(
             chat_id,
             video=output_path,
-            caption=os.path.basename(output_path),  # only filename
+            caption=f"🎬 Processed File\n`{os.path.basename(output_path)}`",
             thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
             progress=progress_message,
             progress_args=("Uploading...", query.message, c_time)
