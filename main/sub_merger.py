@@ -26,6 +26,7 @@ def _awaiting_subtitle(_, __, msg):
 
 awaiting_subtitle = create(_awaiting_subtitle)
 
+
 # ─────────────────────────
 # Step 1: /merge (must reply to a video or document)
 # ─────────────────────────
@@ -55,6 +56,7 @@ async def merge_start(bot, msg):
         disable_web_page_preview=True
     )
 
+
 # ─────────────────────────
 # Step 2: receive subtitle (only when session active)
 # ─────────────────────────
@@ -82,6 +84,7 @@ async def subtitle_receive(bot, msg):
             ]]
         )
     )
+
 
 # ─────────────────────────
 # Step 3: callbacks (unique sm_ prefix)
@@ -133,20 +136,20 @@ async def merge_cb(bot, query: CallbackQuery):
     container = ext.lower()
     sub_ext = os.path.splitext(sub_path)[1].lower()
 
-    # Correct subtitle codec mapping
     if container == ".mp4":
         sub_codec = "mov_text"
     else:
         sub_codec = "srt" if sub_ext in [".srt", ".vtt"] else "ass"
 
-    # Only re-encode the new subtitle stream
+    # ffmpeg command → keep all streams from main file, add new subtitle
     cmd = [
         "ffmpeg", "-y",
         "-i", main_path, "-i", sub_path,
-        "-c", "copy",
-        "-c:s:1", sub_codec,     # only re-encode subtitle from second input
-        "-map", "0",             # map all streams from main video
-        "-map", "1:0",           # map only the first stream of subtitle file
+        "-map", "0",           # keep everything from main (video, audio, old subs)
+        "-map", "1:0",         # add only the new subtitle
+        "-c:v", "copy",
+        "-c:a", "copy",
+        "-c:s", sub_codec,
         "-disposition:s:0", "default",
         output_path
     ]
@@ -176,15 +179,15 @@ async def merge_cb(bot, query: CallbackQuery):
         await bot.send_video(
             chat_id,
             video=output_path,
-            caption=os.path.basename(output_path),  # only filename as caption
+            caption=os.path.basename(output_path),  # only filename
             thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
             progress=progress_message,
-            progress_args=("📤 Uploading...", query.message, c_time)
+            progress_args=("Uploading...", query.message, c_time)
         )
     except Exception as e:
         return await query.message.edit(f"❌ Upload failed: `{e}`")
 
-    # Keep processed video; cleanup temp files only
+    # Keep processed video in Colab, but cleanup temp subtitle & thumbnail & main
     try:
         if os.path.exists(sub_path):
             os.remove(sub_path)
