@@ -27,7 +27,7 @@ async def get_subtitles(bot, msg):
         downloaded = await reply.download(
             file_name=os.path.join(DOWNLOAD_LOCATION, file_name),
             progress=progress_message,
-            progress_args=("⬇️ **Downloading MKV...**", sts, c_time)
+            progress_args=("📥 **Downloading MKV...**", sts, c_time)
         )
     except Exception as e:
         return await sts.edit(f"⚠️ Download failed: {e}")
