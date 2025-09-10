@@ -88,7 +88,7 @@ async def trim_confirm_callback(bot, query):
         output_video = f"{os.path.splitext(downloaded)[0]}_trimmed.mp4"
 
         try:
-            # Use ffmpeg via subprocess to safely trim even complex MKV videos
+            # Use ffmpeg via subprocess to safely trim and fix audio sync
             start = time.strftime('%H:%M:%S', time.gmtime(start_time))
             end = time.strftime('%H:%M:%S', time.gmtime(end_time))
 
@@ -100,7 +100,7 @@ async def trim_confirm_callback(bot, query):
                 "-map", "0:v:0",
                 "-map", "0:a:0",
                 "-c:v", "copy",
-                "-c:a", "aac",
+                "-c:a", "aac", "-b:a", "192k",
                 "-movflags", "+faststart",
                 output_video
             ]
