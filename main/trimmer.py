@@ -32,7 +32,10 @@ async def receive_media(bot, msg):
         if media:
             trim_data[chat_id]['media'] = media
             file_name = media.file_name
-            await msg.reply_text(f"📂 **Media received:** `{file_name}`\n\n**⏳ Please send the trimming durations in the format:** `HH:MM:SS HH:MM:SS` (start_time end_time)")
+            await msg.reply_text(
+                f"📂 **Media received:** `{file_name}`\n\n"
+                f"**⏳ Please send the trimming durations in the format:** `HH:MM:SS HH:MM:SS` (start_time end_time)"
+            )
 
 @Client.on_message(filters.private & filters.text & filters.user(ADMIN))
 async def receive_durations(bot, msg):
@@ -101,6 +104,7 @@ async def trim_confirm_callback(bot, query):
                 "-map", "0:a:0",
                 "-c:v", "copy",
                 "-c:a", "aac", "-b:a", "192k",
+                "-vsync", "1",
                 "-movflags", "+faststart",
                 output_video
             ]
