@@ -4,8 +4,9 @@ import time
 import subprocess
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL, VID_TRIMMER_TEXT, CAPTION
+from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL, CAPTION
 from main.utils import progress_message, humanbytes
+from main.downloader.ytdl_text import VID_TRIMMER_TEXT
 
 # In-memory store for per-chat trimming state
 trim_data = {}
