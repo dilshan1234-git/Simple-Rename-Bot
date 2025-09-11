@@ -15,7 +15,7 @@ trim_data = {}
 def hms_to_seconds(hms: str):
     parts = hms.strip().split(":")
     parts = [int(p) for p in parts]
-    while len(parts) < 3:  # support MM:SS or SS
+    while len(parts) < 3:
         parts.insert(0, 0)
     h, m, s = parts
     return h * 3600 + m * 60 + s
@@ -28,12 +28,11 @@ def seconds_to_hms(s: int):
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
-# 🎬 Trim command handler
+# 🎬 Trim command
 @Client.on_message(filters.private & filters.command("trim") & filters.user(ADMIN))
 async def start_trim_process(bot, msg):
     chat_id = msg.chat.id
     trim_data[chat_id] = {}
-
     await bot.send_photo(
         chat_id=chat_id,
         photo=VID_TRIMMER_URL,
@@ -54,14 +53,6 @@ async def trim_receive_media(bot, msg):
 
     trim_data[chat_id]["media_msg"] = msg
     trim_data[chat_id]["orig_name"] = orig_name
-
-    # save thumb file_id for later download
-    if getattr(msg.video, "thumbs", None):
-        trim_data[chat_id]["thumb_id"] = msg.video.thumbs[0].file_id
-    elif getattr(msg.document, "thumbs", None):
-        trim_data[chat_id]["thumb_id"] = msg.document.thumbs[0].file_id
-    else:
-        trim_data[chat_id]["thumb_id"] = None
 
     await bot.send_message(
         chat_id,
@@ -95,7 +86,7 @@ async def trim_receive_times(bot, msg):
         "end_hms": seconds_to_hms(end_s)
     })
 
-    kb = InlineKeyboardMarkup([[ 
+    kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ Confirm", callback_data=f"trim_confirm:{chat_id}"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"trim_cancel:{chat_id}")
     ]])
@@ -147,21 +138,20 @@ async def trim_confirm(bot, cb):
     except Exception as e:
         return await sts.edit(f"❌ Download failed: {e}")
 
-    # Download real thumbnail
-    thumb_path = None
-    if state.get("thumb_id"):
-        try:
-            thumb_path = os.path.join(DOWNLOAD_LOCATION, f"thumb_{chat_id}.jpg")
-            await bot.download_media(state["thumb_id"], file_name=thumb_path)
-        except Exception as e:
-            print(f"[WARN] Could not download thumb: {e}")
-            thumb_path = None
+    # 🔹 Extract real thumbnail from downloaded video using ffmpeg
+    thumb_path = os.path.join(DOWNLOAD_LOCATION, f"thumb_{chat_id}.jpg")
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-i", downloaded, "-ss", "00:00:01", "-vframes", "1", thumb_path
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except:
+        thumb_path = None
 
     # Paths
     name_root, ext = os.path.splitext(orig_name)
     out_path = os.path.join(DOWNLOAD_LOCATION, f"{name_root}_trimmed{ext}")
 
-    # 🎬 Try fast ffmpeg trim
+    # 🎬 Fast trim
     await sts.edit("✂️ Trimming video (fast mode)...")
     cmd = [
         "ffmpeg", "-y",
@@ -188,12 +178,8 @@ async def trim_confirm(bot, cb):
     if not success:
         return await sts.edit("❌ Trimming failed!")
 
-    # 📤 Upload trimmed file with caption & original thumb
-    caption = (
-        f"🎬 **{os.path.basename(out_path)}**\n"
-        f"🕒 Trimmed: `{start_hms}` ➡️ `{end_hms}`"
-    )
-
+    # 📤 Upload
+    caption = f"🎬 **{os.path.basename(out_path)}**\n🕒 Trimmed: `{start_hms}` ➡️ `{end_hms}`"
     await sts.edit("📤 Uploading trimmed file...")
     c_time = time.time()
     try:
@@ -202,14 +188,14 @@ async def trim_confirm(bot, cb):
             video=out_path,
             caption=caption,
             duration=duration,
-            thumb=thumb_path if thumb_path and os.path.exists(thumb_path) else None,
+            thumb=thumb_path if os.path.exists(thumb_path) else None,
             progress=progress_message,
             progress_args=(f"⬆️ Uploading...\n📂 {os.path.basename(out_path)}", sts, c_time)
         )
     except Exception as e:
         return await sts.edit(f"❌ Upload failed: {e}")
 
-    # 🧹 Cleanup
+    # Cleanup
     for f in [downloaded, out_path, thumb_path]:
         try:
             if f and os.path.exists(f):
