@@ -4,7 +4,7 @@ import time
 import subprocess
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL, CAPTION
+from config import DOWNLOAD_LOCATION, ADMIN, VID_TRIMMER_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import VID_TRIMMER_TEXT
 
@@ -28,13 +28,12 @@ def seconds_to_hms(s: int):
     return f"{h:02d}:{m:02d}:{sec:02d}"
 
 
-# 🎬 Trim command handler (your unchanged code)
+# 🎬 Trim command handler
 @Client.on_message(filters.private & filters.command("trim") & filters.user(ADMIN))
 async def start_trim_process(bot, msg):
     chat_id = msg.chat.id
     trim_data[chat_id] = {}
     
-    # Sending the welcome message with the trimmer logo
     await bot.send_photo(
         chat_id=chat_id,
         photo=VID_TRIMMER_URL,
@@ -43,17 +42,26 @@ async def start_trim_process(bot, msg):
     )
 
 
-# 📥 Receive video/document after /trim
+# 📥 Receive video/document
 @Client.on_message(filters.private & (filters.video | filters.document) & filters.user(ADMIN))
 async def trim_receive_media(bot, msg):
     chat_id = msg.chat.id
     if chat_id not in trim_data:
-        return  # ignore if user not in trim flow
+        return
 
     media = msg.document or msg.video
     orig_name = getattr(media, "file_name", None) or f"file_{msg.id}.mp4"
+
     trim_data[chat_id]["media_msg"] = msg
     trim_data[chat_id]["orig_name"] = orig_name
+
+    # store original thumbnail if exists
+    if getattr(msg.video, "thumbs", None):
+        trim_data[chat_id]["thumb"] = msg.video.thumbs[0].file_id
+    elif getattr(msg.document, "thumbs", None):
+        trim_data[chat_id]["thumb"] = msg.document.thumbs[0].file_id
+    else:
+        trim_data[chat_id]["thumb"] = None
 
     await bot.send_message(
         chat_id,
@@ -87,12 +95,10 @@ async def trim_receive_times(bot, msg):
         "end_hms": seconds_to_hms(end_s)
     })
 
-    kb = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✅ Confirm", callback_data=f"trim_confirm:{chat_id}"),
-            InlineKeyboardButton("❌ Cancel", callback_data=f"trim_cancel:{chat_id}")
-        ]
-    ])
+    kb = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Confirm", callback_data=f"trim_confirm:{chat_id}"),
+        InlineKeyboardButton("❌ Cancel", callback_data=f"trim_cancel:{chat_id}")
+    ]])
 
     await bot.send_message(
         chat_id,
@@ -127,6 +133,7 @@ async def trim_confirm(bot, cb):
     start_s, end_s = state["start_s"], state["end_s"]
     duration = end_s - start_s
     start_hms, end_hms = state["start_hms"], state["end_hms"]
+    thumb = state.get("thumb")
 
     sts = await cb.message.edit_text("📥 Downloading your file...")
     download_path = os.path.join(DOWNLOAD_LOCATION, f"trim_{chat_id}_{int(time.time())}{os.path.splitext(orig_name)[1]}")
@@ -145,7 +152,7 @@ async def trim_confirm(bot, cb):
     name_root, ext = os.path.splitext(orig_name)
     out_path = os.path.join(DOWNLOAD_LOCATION, f"{name_root}_trimmed{ext}")
 
-    # 🎬 Try fast ffmpeg trim (lossless, copy streams)
+    # 🎬 Try fast ffmpeg trim
     await sts.edit("✂️ Trimming video (fast mode)...")
     cmd = [
         "ffmpeg", "-y",
@@ -156,7 +163,7 @@ async def trim_confirm(bot, cb):
     ]
     success = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
 
-    # If failed, fallback to re-encode
+    # fallback re-encode
     if not success or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
         await sts.edit("⚠️ Fast trim failed. Retrying with re-encode...")
         cmd = [
@@ -172,14 +179,11 @@ async def trim_confirm(bot, cb):
     if not success:
         return await sts.edit("❌ Trimming failed!")
 
-    # 📤 Upload trimmed file
-    caption = f"🎬 `{os.path.basename(out_path)}`\n⏱ Trimmed: {start_hms} ➡️ {end_hms}"
-    try:
-        if CAPTION:
-            filesize = humanbytes(os.path.getsize(out_path))
-            caption = CAPTION.format(file_name=os.path.basename(out_path), file_size=filesize, duration=duration)
-    except:
-        pass
+    # 📤 Upload trimmed file with caption & original thumb
+    caption = (
+        f"🎬 **{os.path.basename(out_path)}**\n"
+        f"🕒 Trimmed: `{start_hms}` ➡️ `{end_hms}`"
+    )
 
     await sts.edit("📤 Uploading trimmed file...")
     c_time = time.time()
@@ -189,6 +193,7 @@ async def trim_confirm(bot, cb):
             video=out_path,
             caption=caption,
             duration=duration,
+            thumb=thumb,
             progress=progress_message,
             progress_args=(f"⬆️ Uploading...\n📂 {os.path.basename(out_path)}", sts, c_time)
         )
