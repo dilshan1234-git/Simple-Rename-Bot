@@ -147,7 +147,7 @@ async def trim_confirm(bot, cb):
     except Exception as e:
         return await sts.edit(f"❌ Download failed: {e}")
 
-    # Download original thumb now
+    # Download real thumbnail
     thumb_path = None
     if state.get("thumb_id"):
         try:
