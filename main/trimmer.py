@@ -95,7 +95,7 @@ async def trim_receive_times(bot, msg):
         "end_hms": seconds_to_hms(end_s)
     })
 
-    kb = InlineKeyboardMarkup([[
+    kb = InlineKeyboardMarkup([[ 
         InlineKeyboardButton("✅ Confirm", callback_data=f"trim_confirm:{chat_id}"),
         InlineKeyboardButton("❌ Cancel", callback_data=f"trim_cancel:{chat_id}")
     ]])
@@ -133,7 +133,7 @@ async def trim_confirm(bot, cb):
     start_s, end_s = state["start_s"], state["end_s"]
     duration = end_s - start_s
     start_hms, end_hms = state["start_hms"], state["end_hms"]
-    thumb = state.get("thumb")
+    thumb_id = state.get("thumb")
 
     sts = await cb.message.edit_text("📥 Downloading your file...")
     download_path = os.path.join(DOWNLOAD_LOCATION, f"trim_{chat_id}_{int(time.time())}{os.path.splitext(orig_name)[1]}")
@@ -185,6 +185,15 @@ async def trim_confirm(bot, cb):
         f"🕒 Trimmed: `{start_hms}` ➡️ `{end_hms}`"
     )
 
+    # download thumbnail if exists
+    thumb_path = None
+    if thumb_id:
+        try:
+            thumb_path = os.path.join(DOWNLOAD_LOCATION, f"thumb_{chat_id}.jpg")
+            await bot.download_media(thumb_id, file_name=thumb_path)
+        except Exception:
+            thumb_path = None
+
     await sts.edit("📤 Uploading trimmed file...")
     c_time = time.time()
     try:
@@ -193,7 +202,7 @@ async def trim_confirm(bot, cb):
             video=out_path,
             caption=caption,
             duration=duration,
-            thumb=thumb,
+            thumb=thumb_path,
             progress=progress_message,
             progress_args=(f"⬆️ Uploading...\n📂 {os.path.basename(out_path)}", sts, c_time)
         )
@@ -201,9 +210,10 @@ async def trim_confirm(bot, cb):
         return await sts.edit(f"❌ Upload failed: {e}")
 
     # 🧹 Cleanup
-    for f in [downloaded, out_path]:
+    for f in [downloaded, out_path, thumb_path]:
         try:
-            os.remove(f)
+            if f:
+                os.remove(f)
         except:
             pass
 
