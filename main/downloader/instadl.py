@@ -7,7 +7,7 @@ import instaloader
 import yt_dlp
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
-from config import DOWNLOAD_LOCATION, ADMIN, CAPTION
+from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
 # ----------------------
