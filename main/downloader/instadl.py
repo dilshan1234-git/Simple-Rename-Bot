@@ -158,7 +158,7 @@ async def handle_album_download(bot, chat_id):
         except:
             pass
 
-    msg = await send_clean(bot, chat_id, "⏬ Downloading images... (0/0)")
+    msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
 
     # initialize instaloader
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
@@ -188,7 +188,7 @@ async def handle_album_download(bot, chat_id):
             except:
                 pass
         try:
-            await msg.edit(f"⏬ Downloading images... ({i}/{total})")
+            await msg.edit(f"📥 Downloading images... ({i}/{total})")
         except:
             pass
 
@@ -196,7 +196,7 @@ async def handle_album_download(bot, chat_id):
 
     # zipping and uploading with proper finally
     try:
-        await msg.edit(f"🗜️ Download complete ({total}/{total}). Now zipping...")
+        await msg.edit(f"✅ Download complete ({total}/{total}). Now zipping...")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for file in sorted(os.listdir(ALBUM_FOLDER)):
                 zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
@@ -241,7 +241,7 @@ async def handle_video_download(bot, chat_id):
         try: os.remove(os.path.join(VIDEO_FOLDER, f))
         except: pass
 
-    status_msg = await send_clean(bot, chat_id, "⏬ Preparing to download video...")
+    status_msg = await send_clean(bot, chat_id, "📥 Preparing to download video...")
 
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
@@ -256,7 +256,7 @@ async def handle_video_download(bot, chat_id):
                 total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
                 downloaded_bytes = d.get("downloaded_bytes", 0)
                 percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
-                text = f"⏬ Downloading video: {d.get('filename','')}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
+                text = f"📥 Downloading video: {d.get('filename','')}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
                 asyncio.get_event_loop().create_task(status_msg.edit(text))
             elif d.get("status") == "finished":
                 asyncio.get_event_loop().create_task(status_msg.edit("Merging/processing video..."))
