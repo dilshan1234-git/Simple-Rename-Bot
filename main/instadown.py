@@ -1,8 +1,9 @@
+# main/instadl.py
 import os
-import json
 import time
+import json
 import zipfile
-import threading
+import requests
 import instaloader
 import yt_dlp
 from pyrogram import Client, filters
@@ -10,16 +11,22 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceRepl
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
-# ---------------------- Paths & folders ----------------------
+# ----------------------
+# Paths & folders
+# ----------------------
+COOKIES_PATH = os.path.join("main", "downloader", "cookies.json")
 INSTA_FOLDER = os.path.join(DOWNLOAD_LOCATION, "insta")
 ALBUM_FOLDER = os.path.join(INSTA_FOLDER, "album")
 VIDEO_FOLDER = os.path.join(INSTA_FOLDER, "video")
-COOKIES_PATH = os.path.join(INSTA_FOLDER, "cookies.json")  # will request user to send
 
-# ---------------------- In-memory state ----------------------
-INSTADL_STATE = {}  # chat_id -> dict { step, last_msgs: [msg_id,...], data: {...} }
+# ----------------------
+# In-memory state
+# ----------------------
+INSTADL_STATE = {}  # chat_id -> {step, last_msgs, data}
 
-# ---------------------- Helper functions ----------------------
+# ----------------------
+# Helper functions
+# ----------------------
 def extract_shortcode(url: str):
     try:
         parts = url.split("/")
@@ -33,120 +40,121 @@ def extract_shortcode(url: str):
         pass
     return None
 
-async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
-    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
+def load_cookies():
+    if not os.path.exists(COOKIES_PATH):
+        return False
+    try:
+        with open(COOKIES_PATH, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        return cookies
+    except:
+        return False
+
+def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
+    """Send message and track for cleanup"""
+    msg = bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["last_msgs"].append(msg.id)
     if len(st["last_msgs"]) > 8:
         st["last_msgs"].pop(0)
     return msg
 
-async def cleanup_old(bot, chat_id):
+def cleanup_old(bot, chat_id):
     st = INSTADL_STATE.get(chat_id)
-    if not st: 
+    if not st:
         return
     for mid in st.get("last_msgs", []):
         try:
-            await bot.delete_messages(chat_id, mid)
+            bot.delete_messages(chat_id, mid)
         except:
             pass
     st["last_msgs"] = []
 
-def load_cookies_for_instaloader(L):
-    if not os.path.exists(COOKIES_PATH):
-        return False
-    try:
-        with open(COOKIES_PATH, "r", encoding="utf-8") as f:
-            cookies = json.load(f)
-        for cookie in cookies:
-            L.context._session.cookies.set(cookie.get("name"), cookie.get("value"))
-        return True
-    except Exception as e:
-        print("Failed loading cookies:", e)
-        return False
-
-# ---------------------- Step 1: /instadl command ----------------------
+# ----------------------
+# Step 1: /instadl command
+# ----------------------
 @Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
-async def instadl_start(bot, msg):
+def instadl_start(bot, msg):
     replied = msg.reply_to_message
     if not replied or not replied.text:
-        return await msg.reply_text("Reply to an Instagram post URL with /instadl.")
+        return msg.reply_text("Reply to an Instagram URL with /instadl.")
     
+    chat_id = msg.chat.id
     url = replied.text.strip().split()[0]
     shortcode = extract_shortcode(url)
     if not shortcode:
-        return await msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
-    
-    chat_id = msg.chat.id
+        return msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
+
     INSTADL_STATE[chat_id] = {"step": "await_cookies", "last_msgs": [], "data": {"url": url, "shortcode": shortcode}}
+    cleanup_old(bot, chat_id)
+    send_clean(bot, chat_id, "Please send your `cookies.json` file to proceed.", reply_to_message_id=msg.id, reply_markup=ForceReply(selective=True))
 
-    await cleanup_old(bot, chat_id)
-    await send_clean(bot, chat_id, "Please send your `cookies.json` file for Instagram login.", reply_to_message_id=msg.id)
-
-# ---------------------- Step 2: Receive cookies.json ----------------------
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.document)
-async def instadl_receive_cookies(bot, msg):
+# ----------------------
+# Step 2: Receive cookies.json
+# ----------------------
+@Client.on_message(filters.private & filters.document & filters.user(ADMIN))
+def instadl_receive_cookies(bot, msg):
     chat_id = msg.chat.id
     st = INSTADL_STATE.get(chat_id)
     if not st or st.get("step") != "await_cookies":
         return
 
-    file = msg.document
-    if not file.file_name.endswith(".json"):
-        return await msg.reply_text("Please send a valid `cookies.json` file.")
+    file_name = msg.document.file_name
+    if not file_name.endswith(".json"):
+        return msg.reply_text("❌ Invalid file. Please send your cookies.json file.")
 
-    os.makedirs(INSTA_FOLDER, exist_ok=True)
-    cookies_file_path = os.path.join(INSTA_FOLDER, "cookies.json")
-    await bot.download_media(file.file_id, cookies_file_path)
-    
-    st["data"]["cookies"] = cookies_file_path
-    st["step"] = "choose_method"
-    await cleanup_old(bot, chat_id)
-    await send_clean(bot, chat_id, "✅ Cookies added successfully!")
+    download_path = COOKIES_PATH
+    msg.download(download_path)
+    st["step"] = "choose_download"
+    send_clean(bot, chat_id, "✅ Cookies added successfully!")
 
-    # Show InlineKeyboard
+    # Show choice buttons
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🖼 Album (images)", callback_data="insta_album"),
          InlineKeyboardButton("🎞 Video / Reel", callback_data="insta_video")]
     ])
-    await send_clean(bot, chat_id, "Select download method:", reply_markup=kb)
+    send_clean(bot, chat_id, "Select your download method:", reply_markup=kb)
 
-# ---------------------- Step 3: Handle InlineKeyboard ----------------------
+# ----------------------
+# Step 3: Choice buttons
+# ----------------------
 @Client.on_callback_query(filters.user(ADMIN) & filters.regex(r"^insta_(album|video)$"))
-async def instadl_cb(bot, cq):
-    choice = cq.data.split("_")[1]
+def instadl_choice(bot, cq):
     chat_id = cq.message.chat.id
+    choice = cq.data.split("_")[1]
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["data"]["choice"] = choice
-
-    try: await cq.message.delete()
-    except: pass
-
+    cq.message.delete()
+    
     if choice == "album":
         st["step"] = "await_zipname"
-        prompt = await send_clean(bot, chat_id, "Send ZIP filename (with or without `.zip`):")
-        await bot.send_message(chat_id, "Reply to this message with the ZIP name.", reply_to_message_id=prompt.id, reply_markup=ForceReply(selective=True))
+        prompt = send_clean(bot, chat_id, "Send ZIP filename (with or without .zip):")
+        send_clean(bot, chat_id, "Reply to that message with the ZIP name.", reply_to_message_id=prompt.id, reply_markup=ForceReply(selective=True))
     else:
-        st["step"] = "download_video"
-        threading.Thread(target=handle_video_download, args=(bot, chat_id), daemon=True).start()
+        st["step"] = "downloading_video"
+        handle_video(bot, chat_id)
 
-# ---------------------- Step 4: Receive ZIP name ----------------------
+# ----------------------
+# Step 4: Receive ZIP name
+# ----------------------
 @Client.on_message(filters.private & filters.user(ADMIN))
-async def instadl_zipname(bot, msg):
+def instadl_receive_zip(bot, msg):
     chat_id = msg.chat.id
     st = INSTADL_STATE.get(chat_id)
     if not st or st.get("step") != "await_zipname":
         return
 
-    text = msg.text.strip()
-    zipname = text if text.lower().endswith(".zip") else f"{text}.zip"
+    zipname = msg.text.strip()
+    if not zipname.lower().endswith(".zip"):
+        zipname += ".zip"
     st["data"]["zipname"] = zipname
-    st["step"] = "download_album"
-    threading.Thread(target=handle_album_download, args=(bot, chat_id), daemon=True).start()
+    st["step"] = "downloading_album"
+    handle_album(bot, chat_id)
 
-# ---------------------- Album download ----------------------
-def handle_album_download(bot, chat_id):
-    import requests
+# ----------------------
+# Step 5: Album download
+# ----------------------
+def handle_album(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     shortcode = st["data"]["shortcode"]
     zipname = st["data"]["zipname"]
@@ -156,10 +164,10 @@ def handle_album_download(bot, chat_id):
         try: os.remove(os.path.join(ALBUM_FOLDER, f))
         except: pass
 
-    msg = bot.loop.run_until_complete(send_clean(bot, chat_id, "📥 Downloading images..."))
+    msg = send_clean(bot, chat_id, "📥 Downloading images...")
 
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
-    load_cookies_for_instaloader(L)
+    load_cookies()
 
     try:
         post = instaloader.Post.from_shortcode(L.context, shortcode)
@@ -168,7 +176,7 @@ def handle_album_download(bot, chat_id):
             sidecar = [post]
         total = len(sidecar)
     except Exception as e:
-        bot.loop.run_until_complete(msg.edit(f"Failed to fetch post: {e}"))
+        msg.edit(f"Failed to fetch post: {e}")
         return
 
     for i, node in enumerate(sidecar, 1):
@@ -176,38 +184,33 @@ def handle_album_download(bot, chat_id):
         try:
             L.download_pic(filename, node.display_url, mtime=post.date_utc)
         except:
-            try:
-                r = requests.get(node.display_url, timeout=30)
-                with open(filename, "wb") as f:
-                    f.write(r.content)
-            except:
-                pass
+            r = requests.get(node.display_url, timeout=30)
+            with open(filename, "wb") as f:
+                f.write(r.content)
 
-    bot.loop.run_until_complete(msg.edit(f"📥 Downloaded {total} Images."))
+    msg.edit(f"📥 Downloading images... ({total} Images)")
 
-    # ZIP
     zip_path = os.path.join(INSTA_FOLDER, zipname)
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for file in sorted(os.listdir(ALBUM_FOLDER)):
             zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
 
-    bot.loop.run_until_complete(msg.edit("🚀 Uploading ZIP..."))
+    msg.edit("🚀 Uploading ZIP...")
     c_time = time.time()
-    bot.loop.run_until_complete(bot.send_document(chat_id, zip_path, caption=zipname,
-                                progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time)))
+    bot.send_document(chat_id, zip_path, caption=zipname, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
 
     # Cleanup
     for f in os.listdir(ALBUM_FOLDER):
-        try: os.remove(os.path.join(ALBUM_FOLDER, f))
-        except: pass
-    if os.path.exists(zip_path):
-        os.remove(zip_path)
-    try: bot.loop.run_until_complete(msg.delete())
+        os.remove(os.path.join(ALBUM_FOLDER, f))
+    os.remove(zip_path)
+    try: msg.delete()
     except: pass
     INSTADL_STATE.pop(chat_id, None)
 
-# ---------------------- Video download ----------------------
-def handle_video_download(bot, chat_id):
+# ----------------------
+# Step 6: Video download
+# ----------------------
+def handle_video(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     url = st["data"]["url"]
 
@@ -216,7 +219,7 @@ def handle_video_download(bot, chat_id):
         try: os.remove(os.path.join(VIDEO_FOLDER, f))
         except: pass
 
-    msg = bot.loop.run_until_complete(send_clean(bot, chat_id, "📥 Downloading Video/Reel..."))
+    msg = send_clean(bot, chat_id, "📥 Downloading Video/Reel...")
 
     ydl_opts = {
         "format": "bestvideo+bestaudio/best",
@@ -224,41 +227,27 @@ def handle_video_download(bot, chat_id):
         "merge_output_format": "mp4",
         "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
         "quiet": True,
-        "noprogress": True,
     }
-
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         ydl.download([url])
 
     files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
     if not files:
-        bot.loop.run_until_complete(msg.edit("Downloaded file not found."))
+        msg.edit("Downloaded file not found.")
         return
 
     file_path = os.path.join(VIDEO_FOLDER, files[0])
     file_name = files[0]
-
-    # Get duration
-    duration = None
-    try:
-        from moviepy.editor import VideoFileClip
-        clip = VideoFileClip(file_path)
-        duration = int(clip.duration)
-        clip.close()
-    except:
-        pass
-
     filesize = humanbytes(os.path.getsize(file_path))
-    cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
+    cap = f"{file_name}\n\n💽 Size: {filesize}"
 
-    bot.loop.run_until_complete(msg.edit(f"📥 Downloaded: {file_name}"))
-    bot.loop.run_until_complete(msg.edit("🚀 Uploading Video..."))
+    msg.edit(f"📥 Downloading Video/Reel: {file_name}")
+
     c_time = time.time()
-    bot.loop.run_until_complete(bot.send_video(chat_id, video=file_path, caption=cap,
-                                progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time)))
+    bot.send_video(chat_id, video=file_path, caption=cap, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
 
     try: os.remove(file_path)
     except: pass
-    try: bot.loop.run_until_complete(msg.delete())
+    try: msg.delete()
     except: pass
     INSTADL_STATE.pop(chat_id, None)
