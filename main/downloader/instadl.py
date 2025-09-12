@@ -152,9 +152,10 @@ async def handle_album_download(bot, chat_id):
         except:
             pass
 
-    msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
+    status_msg = await send_clean(bot, chat_id, "📥 Downloading images...")
 
-    async def download_album():
+    # Blocking download in background
+    def download_album():
         L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
         load_cookies_for_instaloader(L)
         try:
@@ -162,9 +163,11 @@ async def handle_album_download(bot, chat_id):
             sidecar = list(post.get_sidecar_nodes())
             if not sidecar:
                 sidecar = [post]
-            total = len(sidecar)
         except Exception as e:
-            return f"Failed to fetch post: {e}"
+            return str(e), []
+
+        total = len(sidecar)
+        downloaded_files = []
 
         for i, node in enumerate(sidecar, 1):
             filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
@@ -177,30 +180,29 @@ async def handle_album_download(bot, chat_id):
                     with open(filename, "wb") as f:
                         f.write(r.content)
                 except:
-                    pass
-            try:
-                await msg.edit(f"📥 Downloading images... ({i}/{total})")
-            except:
-                pass
-        return None
+                    continue
+            downloaded_files.append(filename)
+        return None, downloaded_files
 
-    err = await asyncio.to_thread(lambda: asyncio.run(download_album()))
+    err, files = await asyncio.to_thread(download_album)
     if err:
-        await msg.edit(err)
+        await status_msg.edit(f"Failed to fetch post: {err}")
         return
 
-    zip_path = os.path.join(INSTA_FOLDER, zipname)
+    await status_msg.edit(f"📥 Downloading images... ({len(files)} Images)")
 
-    async def zip_and_upload():
+    # Zip and upload
+    zip_path = os.path.join(INSTA_FOLDER, zipname)
+    def zip_files():
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for file in sorted(os.listdir(ALBUM_FOLDER)):
                 zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
-        await msg.edit("🚀 Uploading ZIP...")
-        c_time = time.time()
-        await bot.send_document(chat_id, zip_path, caption=zipname,
-                                progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
+    await asyncio.to_thread(zip_files)
 
-    await zip_and_upload()
+    await status_msg.edit("🚀 Uploading ZIP...")
+    c_time = time.time()
+    await bot.send_document(chat_id, zip_path, caption=zipname,
+                            progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time))
 
     # cleanup
     try:
@@ -211,7 +213,7 @@ async def handle_album_download(bot, chat_id):
     except:
         pass
 
-    try: await msg.delete()
+    try: await status_msg.delete()
     except: pass
     INSTADL_STATE.pop(chat_id, None)
 
@@ -227,42 +229,32 @@ async def handle_video_download(bot, chat_id):
         try: os.remove(os.path.join(VIDEO_FOLDER, f))
         except: pass
 
-    status_msg = await send_clean(bot, chat_id, "📥 Preparing to download video...")
+    # Download video using yt-dlp in background thread
+    def download_video():
+        ydl_opts = {
+            "format": "bestvideo+bestaudio/best",
+            "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
+            "merge_output_format": "mp4",
+            "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
+            "quiet": True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
 
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
-    }
+    await asyncio.to_thread(download_video)
 
-    def ytdl_hook(d):
-        try:
-            if d.get("status") == "downloading":
-                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
-                downloaded_bytes = d.get("downloaded_bytes", 0)
-                percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
-                text = f"📥 Downloading video: {d.get('filename','')}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
-                asyncio.get_event_loop().create_task(status_msg.edit(text))
-            elif d.get("status") == "finished":
-                asyncio.get_event_loop().create_task(status_msg.edit("Merging/processing video..."))
-        except:
-            pass
-
-    ydl_opts["progress_hooks"] = [ytdl_hook]
-
-    # run yt-dlp in background thread
-    await asyncio.to_thread(lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
-
+    # Get downloaded file
     files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
     if not files:
-        await status_msg.edit("Downloaded file not found.")
         return
 
     file_path = os.path.join(VIDEO_FOLDER, files[0])
     file_name = files[0]
 
-    async def process_video():
+    status_msg = await send_clean(bot, chat_id, f"📥 Downloading Video/Reel: {file_name}")
+
+    # Prepare caption
+    def get_video_info():
         duration = None
         try:
             from moviepy.editor import VideoFileClip
@@ -271,27 +263,21 @@ async def handle_video_download(bot, chat_id):
             clip.close()
         except:
             pass
-
         filesize = humanbytes(os.path.getsize(file_path))
-        cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
+        return duration, filesize
 
-        try:
-            await status_msg.edit("🚀 Uploading video...")
-            c_time = time.time()
-            await bot.send_video(chat_id, video=file_path, caption=cap,
-                                 progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time))
-        except Exception as e:
-            await status_msg.edit(f"Upload failed: {e}")
-        finally:
-            try:
-                os.remove(file_path)
-            except:
-                pass
+    duration, filesize = await asyncio.to_thread(get_video_info)
+    cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
 
-    await process_video()
+    # Upload video
+    c_time = time.time()
+    await bot.send_video(chat_id, video=file_path, caption=cap,
+                         progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time))
 
-    try:
-        await status_msg.delete()
-    except:
-        pass
+    # cleanup
+    try: os.remove(file_path)
+    except: pass
+
+    try: await status_msg.delete()
+    except: pass
     INSTADL_STATE.pop(chat_id, None)
