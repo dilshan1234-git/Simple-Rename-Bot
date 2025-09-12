@@ -151,11 +151,16 @@ async def handle_album_download(bot, chat_id):
     zipname = st["data"]["zipname"]
 
     os.makedirs(ALBUM_FOLDER, exist_ok=True)
+    # clean old files
     for f in os.listdir(ALBUM_FOLDER):
-        try: os.remove(os.path.join(ALBUM_FOLDER, f))
-        except: pass
+        try:
+            os.remove(os.path.join(ALBUM_FOLDER, f))
+        except:
+            pass
 
     msg = await send_clean(bot, chat_id, "⏬ Downloading images... (0/0)")
+
+    # initialize instaloader
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
     load_cookies_for_instaloader(L)
 
@@ -163,12 +168,13 @@ async def handle_album_download(bot, chat_id):
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         sidecar = list(post.get_sidecar_nodes())
         if not sidecar:
-            sidecar = [post]
+            sidecar = [post]  # single image post
         total = len(sidecar)
     except Exception as e:
         await msg.edit(f"Failed to fetch post: {e}")
         return
 
+    # download images with progress
     for i, node in enumerate(sidecar, 1):
         filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
         try:
@@ -187,29 +193,40 @@ async def handle_album_download(bot, chat_id):
             pass
 
     zip_path = os.path.join(INSTA_FOLDER, zipname)
+
+    # zipping and uploading with proper finally
     try:
         await msg.edit(f"🗜️ Download complete ({total}/{total}). Now zipping...")
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for file in sorted(os.listdir(ALBUM_FOLDER)):
                 zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
-    except Exception as e:
-        await msg.edit(f"Zipping error: {e}")
-        return
 
-    try:
         await msg.edit("🚀 Uploading ZIP...")
         c_time = time.time()
-        await bot.send_document(chat_id, zip_path, caption=zipname, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
+        await bot.send_document(
+            chat_id,
+            zip_path,
+            caption=zipname,
+            progress=progress_message,
+            progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time)
+        )
     except Exception as e:
-        await msg.edit(f"Upload error: {e}")
-        return
+        await msg.edit(f"Error: {e}")
     finally:
-        for f in os.listdir(ALBUM_FOLDER):
-            try: os.remove(os.path.join(ALBUM_FOLDER, f))
-        if os.path.exists(zip_path):
-            os.remove(zip_path)
+        # cleanup all files safely
+        try:
+            for f in os.listdir(ALBUM_FOLDER):
+                os.remove(os.path.join(ALBUM_FOLDER, f))
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+        except:
+            pass
 
-    await msg.delete()
+    # remove status message and reset state
+    try:
+        await msg.delete()
+    except:
+        pass
     INSTADL_STATE.pop(chat_id, None)
 
 # ----------------------
