@@ -289,25 +289,29 @@ async def handle_video_download(bot, chat_id):
         pass
 
     filesize = humanbytes(os.path.getsize(file_path))
-    if CAPTION:
-        try:
-            cap = CAPTION.format(file_name=file_name, file_size=filesize, duration=duration or "Unknown")
-        except:
-            cap = f"{file_name}\n💽 size: {filesize}\n🕒 duration: {duration or 'Unknown'} seconds"
-    else:
-        cap = f"{file_name}\n💽 size: {filesize}\n🕒 duration: {duration or 'Unknown'} seconds"
+    # Dynamically create caption
+    cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
 
     try:
         await status_msg.edit("🚀 Uploading video...")
         c_time = time.time()
-        await bot.send_video(chat_id, video=file_path, caption=cap, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time))
-    except:
-        pass
+        await bot.send_video(
+            chat_id,
+            video=file_path,
+            caption=cap,
+            progress=progress_message,
+            progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time)
+        )
+    except Exception as e:
+        await status_msg.edit(f"Upload failed: {e}")
     finally:
         try:
             os.remove(file_path)
         except:
             pass
 
-    await status_msg.delete()
+    try:
+        await status_msg.delete()
+    except:
+        pass
     INSTADL_STATE.pop(chat_id, None)
