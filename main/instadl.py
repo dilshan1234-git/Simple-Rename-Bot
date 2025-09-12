@@ -2,10 +2,7 @@ import os
 import json
 import time
 import zipfile
-import requests
-from threading import Thread
-import instaloader
-import yt_dlp
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -27,8 +24,9 @@ INSTADL_STATE = {}  # chat_id -> dict { step, last_msgs: [msg_id,...], data: {..
 # ----------------------
 # Helper functions
 # ----------------------
-def send_clean_sync(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
-    msg = bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
+def send_clean_sync(bot, chat_id, text):
+    """Send message synchronously (blocking is minimal)."""
+    msg = bot.send_message(chat_id, text)
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["last_msgs"].append(msg.id)
     if len(st["last_msgs"]) > 8:
@@ -45,19 +43,6 @@ def cleanup_old_sync(bot, chat_id):
         except:
             pass
     st["last_msgs"] = []
-
-def load_cookies_for_instaloader(L):
-    if not os.path.exists(COOKIES_PATH):
-        return False
-    try:
-        with open(COOKIES_PATH, "r", encoding="utf-8") as f:
-            cookies = json.load(f)
-        for cookie in cookies:
-            L.context._session.cookies.set(cookie.get("name"), cookie.get("value"))
-        return True
-    except Exception as e:
-        print("Failed loading cookies:", e)
-        return False
 
 def extract_shortcode(url: str):
     try:
@@ -96,7 +81,7 @@ def instadl_start(bot, msg):
         ]
     )
     cleanup_old_sync(bot, chat_id)
-    send_clean_sync(bot, chat_id, "Select your download method:", reply_markup=kb, reply_to_message_id=msg.id)
+    send_clean_sync(bot, chat_id, "Select your download method:").edit_reply_markup(kb)
 
 # ----------------------
 # Callback handler
@@ -110,7 +95,8 @@ def instadl_cb(bot, cq):
 
     try:
         cq.message.delete()
-    except: pass
+    except:
+        pass
 
     if choice == "album":
         st["step"] = "await_zipname"
@@ -118,7 +104,7 @@ def instadl_cb(bot, cq):
         bot.send_message(chat_id, "Reply to that message with the ZIP name.", reply_to_message_id=prompt.id, reply_markup=ForceReply(selective=True))
     else:
         st["step"] = "downloading_video"
-        Thread(target=handle_video_download_sync, args=(bot, chat_id), daemon=True).start()
+        download_video_process(bot, chat_id)
 
 # ----------------------
 # Text reply handler for ZIP
@@ -135,134 +121,104 @@ def instadl_text_handler(bot, msg):
     st["data"]["zipname"] = zipname
     st["step"] = "downloading_album"
     cleanup_old_sync(bot, chat_id)
-    Thread(target=handle_album_download_sync, args=(bot, chat_id), daemon=True).start()
+    download_album_process(bot, chat_id)
 
 # ----------------------
-# Album download flow
+# Album download subprocess
 # ----------------------
-def handle_album_download_sync(bot, chat_id):
+def download_album_process(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     shortcode = st["data"]["shortcode"]
     zipname = st["data"]["zipname"]
 
     os.makedirs(ALBUM_FOLDER, exist_ok=True)
     for f in os.listdir(ALBUM_FOLDER):
-        try: os.remove(os.path.join(ALBUM_FOLDER, f))
-        except: pass
-
-    msg = send_clean_sync(bot, chat_id, "📥 Downloading images... (0 Images)")
-
-    # download images
-    L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
-    load_cookies_for_instaloader(L)
-
-    try:
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
-        sidecar = list(post.get_sidecar_nodes())
-        if not sidecar:
-            sidecar = [post]
-        total = len(sidecar)
-    except Exception as e:
-        msg.edit(f"Failed to fetch post: {e}")
-        return
-
-    for i, node in enumerate(sidecar, 1):
-        filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
         try:
-            L.download_pic(filename, node.display_url, mtime=post.date_utc)
+            os.remove(os.path.join(ALBUM_FOLDER, f))
         except:
-            try:
-                r = requests.get(node.display_url, timeout=30)
-                with open(filename, "wb") as f:
-                    f.write(r.content)
-            except:
-                pass
-    msg.edit(f"📥 Downloading images... ({total} Images)")
+            pass
 
+    msg = send_clean_sync(bot, chat_id, "📥 Downloading images...")
+
+    # Run instaloader in subprocess
+    command = [
+        "python3", "-u", "-m", "instaloader",
+        "--dirname-pattern", ALBUM_FOLDER,
+        "--no-videos",
+        "--no-video-thumbnails",
+        shortcode
+    ]
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    # Count images
+    count = len([f for f in os.listdir(ALBUM_FOLDER) if f.endswith(".jpg")])
+    bot.edit_message_text(chat_id, msg.id, f"📥 Downloading images... ({count} Images)")
+
+    # Zip files
     zip_path = os.path.join(INSTA_FOLDER, zipname)
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file in sorted(os.listdir(ALBUM_FOLDER)):
+            zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
+
+    # Upload ZIP
+    c_time = time.time()
+    bot.send_document(chat_id, zip_path, caption=zipname, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
+
+    # Cleanup
+    for f in os.listdir(ALBUM_FOLDER):
+        os.remove(os.path.join(ALBUM_FOLDER, f))
+    os.remove(zip_path)
     try:
-        msg.edit(f"✅ Download complete ({total} Images). Now zipping...")
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file in sorted(os.listdir(ALBUM_FOLDER)):
-                zf.write(os.path.join(ALBUM_FOLDER, file), arcname=file)
-        msg.edit("🚀 Uploading ZIP...")
-        c_time = time.time()
-        bot.send_document(chat_id, zip_path, caption=zipname,
-                          progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
-    except Exception as e:
-        msg.edit(f"Error: {e}")
-    finally:
-        for f in os.listdir(ALBUM_FOLDER):
-            try: os.remove(os.path.join(ALBUM_FOLDER, f))
-            except: pass
-        if os.path.exists(zip_path):
-            try: os.remove(zip_path)
-            except: pass
-    try: msg.delete()
+        bot.delete_messages(chat_id, msg.id)
     except: pass
     INSTADL_STATE.pop(chat_id, None)
 
 # ----------------------
-# Video/Reel download flow
+# Video/Reel download subprocess
 # ----------------------
-def handle_video_download_sync(bot, chat_id):
+def download_video_process(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     url = st["data"]["url"]
 
     os.makedirs(VIDEO_FOLDER, exist_ok=True)
     for f in os.listdir(VIDEO_FOLDER):
-        try: os.remove(os.path.join(VIDEO_FOLDER, f))
-        except: pass
+        try:
+            os.remove(os.path.join(VIDEO_FOLDER, f))
+        except:
+            pass
 
-    status_msg = send_clean_sync(bot, chat_id, "📥 Downloading Video/Reel... (Preparing)")
+    msg = send_clean_sync(bot, chat_id, "📥 Downloading Video/Reel...")
 
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
-        "quiet": True
-    }
+    # yt-dlp command
+    outtmpl = os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s")
+    command = [
+        "yt-dlp",
+        "-f", "bestvideo+bestaudio/best",
+        "-o", outtmpl,
+        url
+    ]
+    subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            filename = ydl.prepare_filename(info)
-            status_msg.edit(f"📥 Downloading Video/Reel: {os.path.basename(filename)}")
-            ydl.download([url])
-    except Exception as e:
-        status_msg.edit(f"Download failed: {e}")
-        return
-
+    # Find downloaded file
     files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
     if not files:
-        status_msg.edit("Downloaded file not found.")
+        bot.edit_message_text(chat_id, msg.id, "Downloaded file not found.")
         return
-
     file_path = os.path.join(VIDEO_FOLDER, files[0])
     file_name = files[0]
 
+    bot.edit_message_text(chat_id, msg.id, f"📥 Downloading Video/Reel: {file_name}")
+
+    # Upload video
+    filesize = humanbytes(os.path.getsize(file_path))
+    cap = f"{file_name}\n💽 Size: {filesize}"
+    c_time = time.time()
+    bot.send_video(chat_id, file_path, caption=cap, progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time))
+
+    # Cleanup
     try:
-        from moviepy.editor import VideoFileClip
-        duration = None
-        try:
-            clip = VideoFileClip(file_path)
-            duration = int(clip.duration)
-            clip.close()
-        except: pass
-        filesize = humanbytes(os.path.getsize(file_path))
-        cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
-
-        status_msg.edit("🚀 Uploading Video...")
-        c_time = time.time()
-        bot.send_video(chat_id, video=file_path, caption=cap,
-                       progress=progress_message, progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time))
-    except Exception as e:
-        status_msg.edit(f"Upload failed: {e}")
-    finally:
-        try: os.remove(file_path)
-        except: pass
-
-    try: status_msg.delete()
-    except: pass
+        os.remove(file_path)
+        bot.delete_messages(chat_id, msg.id)
+    except:
+        pass
     INSTADL_STATE.pop(chat_id, None)
