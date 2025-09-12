@@ -94,8 +94,8 @@ async def instadl_start(bot, msg):
 
     kb = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Album (images)", callback_data="insta_album"),
-             InlineKeyboardButton("Video / Reel", callback_data="insta_video")]
+            [InlineKeyboardButton("🖼 Album (images)", callback_data="insta_album"),
+             InlineKeyboardButton("🎞 Video / Reel", callback_data="insta_video")]
         ]
     )
     await cleanup_old(bot, chat_id)
