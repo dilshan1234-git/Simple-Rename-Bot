@@ -11,3 +11,4 @@ pymediainfo
 aiotelegraph
 ffmpeg-python
 mega.py
+instaloader
