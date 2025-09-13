@@ -1,387 +1,263 @@
-# main/instadl.py
-import os
-import time
-import json
-import zipfile
-import requests
+import time, os, zipfile, json, asyncio
+from pyrogram import Client, filters, enums
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from config import DOWNLOAD_LOCATION, CAPTION, ADMIN
+from main.utils import progress_message, humanbytes
 import instaloader
 import yt_dlp
-import asyncio
-from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
-from config import DOWNLOAD_LOCATION, ADMIN
-from main.utils import progress_message, humanbytes
 
-# ----------------------
-# Paths & folders
-# ----------------------
-COOKIES_PATH = os.path.join("main", "downloader", "cookies.json")
-INSTA_FOLDER = os.path.join(DOWNLOAD_LOCATION, "insta")
-ALBUM_FOLDER = os.path.join(INSTA_FOLDER, "album")
-VIDEO_FOLDER = os.path.join(INSTA_FOLDER, "video")
+# Store user states and data
+user_states = {}
+user_data = {}
 
-# ----------------------
-# In-memory state
-# ----------------------
-INSTADL_STATE = {}  # chat_id -> {step, last_msgs, data}
-
-# Semaphore to limit concurrent downloads
-download_semaphore = asyncio.Semaphore(2)  # Allow max 2 concurrent downloads
-
-# ----------------------
-# Helper functions
-# ----------------------
-def extract_shortcode(url: str):
-    try:
-        parts = url.split("/")
-        for i, p in enumerate(parts):
-            if p in ("p", "reel", "tv") and i + 1 < len(parts):
-                return parts[i + 1].split("?")[0]
-        segs = [s for s in parts if s]
-        if segs:
-            return segs[-1].split("?")[0]
-    except:
-        pass
-    return None
+# Initialize Instaloader
+L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False)
 
 def load_cookies():
-    if not os.path.exists(COOKIES_PATH):
-        return False
+    """Load cookies from git repo"""
+    cookies_file = "cookies.json"  # Store this file in your git repo root
     try:
-        with open(COOKIES_PATH, "r", encoding="utf-8") as f:
+        with open(cookies_file, "r", encoding="utf-8") as f:
             cookies = json.load(f)
-        return cookies
-    except:
-        return False
+        
+        # Apply cookies to Instaloader session
+        for cookie in cookies:
+            L.context._session.cookies.set(cookie["name"], cookie["value"])
+        
+        return cookies_file
+    except Exception as e:
+        print(f"Error loading cookies: {e}")
+        return None
 
-async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
-    """Send message and track for cleanup"""
-    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
-    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
-    st["last_msgs"].append(msg.id)
-    if len(st["last_msgs"]) > 8:
-        st["last_msgs"].pop(0)
-    return msg
+# Load cookies on startup
+cookies_file = load_cookies()
 
-async def cleanup_old(bot, chat_id):
-    st = INSTADL_STATE.get(chat_id)
-    if not st:
-        return
-    for mid in st.get("last_msgs", []):
-        try:
-            await bot.delete_messages(chat_id, mid)
-        except:
-            pass
-    st["last_msgs"] = []
-
-# ----------------------
-# Step 1: /instadl command
-# ----------------------
 @Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
-async def instadl_start(bot, msg):
-    replied = msg.reply_to_message
-    if not replied or not replied.text:
-        return await msg.reply_text("Reply to an Instagram URL with /instadl.")
+async def instagram_downloader(bot, msg):
+    reply = msg.reply_to_message
+    if not reply or not reply.text:
+        return await msg.reply_text("Please reply to an Instagram URL with /instadl command")
     
-    chat_id = msg.chat.id
-    url = replied.text.strip().split()[0]
-    shortcode = extract_shortcode(url)
-    if not shortcode:
-        return await msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
-
-    # Check if already processing
-    if download_semaphore.locked():
-        return await msg.reply_text("⏳ Already processing downloads. Please wait and try again.")
-
-    INSTADL_STATE[chat_id] = {"step": "await_cookies", "last_msgs": [], "data": {"url": url, "shortcode": shortcode}}
-    await cleanup_old(bot, chat_id)
-    await send_clean(bot, chat_id, "Please send your `cookies.json` file to proceed.", reply_to_message_id=msg.id, reply_markup=ForceReply(selective=True))
-
-# ----------------------
-# Step 2: Receive cookies.json
-# ----------------------
-@Client.on_message(filters.private & filters.document & filters.user(ADMIN))
-async def instadl_receive_cookies(bot, msg):
-    chat_id = msg.chat.id
-    st = INSTADL_STATE.get(chat_id)
-    if not st or st.get("step") != "await_cookies":
-        return
-
-    file_name = msg.document.file_name
-    if not file_name.endswith(".json"):
-        return await msg.reply_text("❌ Invalid file. Please send your cookies.json file.")
-
-    download_path = COOKIES_PATH
-    await msg.download(download_path)
-    st["step"] = "choose_download"
-    await send_clean(bot, chat_id, "✅ Cookies added successfully!")
-
-    # Show choice buttons
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🖼 Album (images)", callback_data="insta_album"),
-         InlineKeyboardButton("🎞 Video / Reel", callback_data="insta_video")]
+    url = reply.text.strip()
+    if "instagram.com" not in url:
+        return await msg.reply_text("Please provide a valid Instagram URL")
+    
+    # Store URL for later use
+    user_data[msg.from_user.id] = {"url": url}
+    
+    # Create inline keyboard
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📸 Album", callback_data="dl_album")],
+        [InlineKeyboardButton("🎥 Video/Reel", callback_data="dl_video")]
     ])
-    await send_clean(bot, chat_id, "Select your download method:", reply_markup=kb)
-
-# ----------------------
-# Step 3: Choice buttons
-# ----------------------
-@Client.on_callback_query(filters.user(ADMIN) & filters.regex(r"^insta_(album|video)$"))
-async def instadl_choice(bot, cq):
-    chat_id = cq.message.chat.id
-    choice = cq.data.split("_")[1]
-    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
-    st["data"]["choice"] = choice
-    await cq.message.delete()
     
-    if choice == "album":
-        st["step"] = "await_zipname"
-        prompt = await send_clean(bot, chat_id, "Send ZIP filename (with or without .zip):")
-        await send_clean(bot, chat_id, "Reply to that message with the ZIP name.", reply_to_message_id=prompt.id, reply_markup=ForceReply(selective=True))
-    else:
-        st["step"] = "downloading_video"
-        await handle_video(bot, chat_id)
+    await msg.reply_text("Select your download method:", reply_markup=keyboard)
 
-# ----------------------
-# Step 4: Receive ZIP name
-# ----------------------
-@Client.on_message(filters.private & filters.user(ADMIN))
-async def instadl_receive_zip(bot, msg):
-    chat_id = msg.chat.id
-    st = INSTADL_STATE.get(chat_id)
-    if not st or st.get("step") != "await_zipname":
-        return
-
-    zipname = msg.text.strip()
-    if not zipname.lower().endswith(".zip"):
-        zipname += ".zip"
-    st["data"]["zipname"] = zipname
-    st["step"] = "downloading_album"
-    await handle_album(bot, chat_id)
-
-# ----------------------
-# Step 5: Album download (Non-blocking)
-# ----------------------
-async def handle_album(bot, chat_id):
-    async with download_semaphore:  # Limit concurrent downloads
-        st = INSTADL_STATE[chat_id]
-        shortcode = st["data"]["shortcode"]
-        zipname = st["data"]["zipname"]
-
-        # Create folders in executor to avoid blocking
-        await asyncio.get_event_loop().run_in_executor(None, setup_album_folder)
-        
-        msg = await send_clean(bot, chat_id, "📥 Downloading images...")
-
-        try:
-            # Run instaloader operations in executor to avoid blocking
-            sidecar, total = await asyncio.get_event_loop().run_in_executor(
-                None, get_post_sidecar, shortcode
-            )
-            
-            if total == 0:
-                await msg.edit("❌ No images found in this post.")
-                return
-
-            await msg.edit(f"📥 Downloading images... (0/{total})")
-            
-            # Download images in executor with progress updates
-            await download_album_images(sidecar, msg, total)
-            
-            # Create ZIP in executor
-            zip_path = await asyncio.get_event_loop().run_in_executor(
-                None, create_album_zip, zipname
-            )
-            
-            if not zip_path or not os.path.exists(zip_path):
-                await msg.edit("❌ Failed to create ZIP file.")
-                return
-
-            await msg.edit("🚀 Uploading ZIP...")
-            c_time = time.time()
-            
-            # Upload with progress
-            await bot.send_document(
-                chat_id, zip_path, 
-                caption=zipname, 
-                progress=progress_message, 
-                progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time)
-            )
-
-            # Cleanup in executor
-            await asyncio.get_event_loop().run_in_executor(None, cleanup_album_files, zip_path)
-            
-        except Exception as e:
-            await msg.edit(f"❌ Error downloading album: {e}")
-        
-        finally:
-            try:
-                await msg.delete()
-            except:
-                pass
-            INSTADL_STATE.pop(chat_id, None)
-
-def setup_album_folder():
-    """Setup album folder - runs in executor"""
-    os.makedirs(ALBUM_FOLDER, exist_ok=True)
-    for f in os.listdir(ALBUM_FOLDER):
-        try:
-            os.remove(os.path.join(ALBUM_FOLDER, f))
-        except:
-            pass
-
-def get_post_sidecar(shortcode):
-    """Get post sidecar nodes - runs in executor"""
-    L = instaloader.Instaloader(
-        download_videos=False, 
-        download_video_thumbnails=False, 
-        dirname_pattern=ALBUM_FOLDER
-    )
-    load_cookies()
+@Client.on_callback_query(filters.regex(r"^dl_"))
+async def handle_download_callback(bot, callback_query: CallbackQuery):
+    user_id = callback_query.from_user.id
+    data = callback_query.data
     
-    post = instaloader.Post.from_shortcode(L.context, shortcode)
-    sidecar = list(post.get_sidecar_nodes())
-    if not sidecar:
-        sidecar = [post]
+    if user_id not in user_data:
+        return await callback_query.answer("Session expired. Please start again.", show_alert=True)
     
-    return sidecar, len(sidecar)
+    if data == "dl_album":
+        user_states[user_id] = "waiting_zip_name"
+        await callback_query.edit_message_text("📝 Send name for your zip file (without .zip extension):")
+    
+    elif data == "dl_video":
+        await callback_query.edit_message_text("🔄 Downloading your video/reel...")
+        await download_video(bot, callback_query.message, user_data[user_id]["url"])
 
-async def download_album_images(sidecar, msg, total):
-    """Download images with progress updates"""
-    for i, node in enumerate(sidecar, 1):
-        filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
+@Client.on_message(filters.private & filters.text & filters.user(ADMIN))
+async def handle_zip_name(bot, msg):
+    user_id = msg.from_user.id
+    
+    if user_id in user_states and user_states[user_id] == "waiting_zip_name":
+        zip_name = msg.text.strip()
+        user_data[user_id]["zip_name"] = zip_name
+        user_states[user_id] = None
         
-        # Download each image in executor
-        await asyncio.get_event_loop().run_in_executor(
-            None, download_single_image, filename, node.display_url
+        # Delete the message and start downloading
+        await msg.delete()
+        
+        # Start album download
+        await download_album(bot, msg, user_data[user_id]["url"], zip_name)
+
+async def download_album(bot, msg, url, zip_name):
+    try:
+        # Extract shortcode from URL
+        if "/p/" in url:
+            shortcode = url.split("/p/")[1].split("/")[0]
+        else:
+            return await msg.reply_text("❌ Invalid Instagram post URL")
+        
+        # Progress message
+        progress_msg = await msg.reply_text("🔄 Downloading your images... 0/0")
+        
+        # Fetch post
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        
+        # Create folder
+        folder = os.path.join(DOWNLOAD_LOCATION, f"album_{int(time.time())}")
+        os.makedirs(folder, exist_ok=True)
+        
+        # Get total images count
+        sidecar_nodes = list(post.get_sidecar_nodes())
+        total_images = len(sidecar_nodes)
+        
+        if total_images == 0:
+            return await progress_msg.edit("❌ No images found in this post")
+        
+        # Download images
+        for i, node in enumerate(sidecar_nodes, 1):
+            await progress_msg.edit(f"🔄 Downloading your images... {i}/{total_images}")
+            
+            L.download_pic(
+                os.path.join(folder, f"image_{i}.jpg"),
+                url=node.display_url,
+                mtime=post.date_utc
+            )
+        
+        # Zip files
+        await progress_msg.edit("📦 Now zipping...")
+        zip_path = os.path.join(DOWNLOAD_LOCATION, f"{zip_name}.zip")
+        
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            for file in os.listdir(folder):
+                zipf.write(os.path.join(folder, file), arcname=file)
+        
+        # Upload zip
+        await progress_msg.edit("🚀 Uploading your zip...")
+        
+        zip_size = os.path.getsize(zip_path)
+        caption = f"📦 {zip_name}.zip\n💽 Size: {humanbytes(zip_size)}\n📸 Images: {total_images}"
+        
+        c_time = time.time()
+        await bot.send_document(
+            msg.chat.id,
+            document=zip_path,
+            caption=caption,
+            progress=progress_message,
+            progress_args=("Upload Started..... Thanks To All Who Supported ❤", progress_msg, c_time)
         )
         
-        # Update progress every few images to avoid too many updates
-        if i % max(1, total // 10) == 0 or i == total:
-            try:
-                await msg.edit(f"📥 Downloading images... ({i}/{total})")
-            except:
-                pass
-
-def download_single_image(filename, url):
-    """Download single image - runs in executor"""
-    try:
-        r = requests.get(url, timeout=30)
-        with open(filename, "wb") as f:
-            f.write(r.content)
-    except Exception as e:
-        print(f"Failed to download image: {e}")
-
-def create_album_zip(zipname):
-    """Create ZIP file - runs in executor"""
-    try:
-        zip_path = os.path.join(INSTA_FOLDER, zipname)
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file in sorted(os.listdir(ALBUM_FOLDER)):
-                file_path = os.path.join(ALBUM_FOLDER, file)
-                if os.path.exists(file_path):
-                    zf.write(file_path, arcname=file)
-        return zip_path
-    except Exception as e:
-        print(f"Failed to create ZIP: {e}")
-        return None
-
-def cleanup_album_files(zip_path):
-    """Cleanup files - runs in executor"""
-    for f in os.listdir(ALBUM_FOLDER):
-        try:
-            os.remove(os.path.join(ALBUM_FOLDER, f))
-        except:
-            pass
-    try:
+        # Cleanup
+        import shutil
+        shutil.rmtree(folder)
         os.remove(zip_path)
-    except:
-        pass
-
-# ----------------------
-# Step 6: Video download (Non-blocking)
-# ----------------------
-async def handle_video(bot, chat_id):
-    async with download_semaphore:  # Limit concurrent downloads
-        st = INSTADL_STATE[chat_id]
-        url = st["data"]["url"]
-
-        # Setup video folder in executor
-        await asyncio.get_event_loop().run_in_executor(None, setup_video_folder)
+        await progress_msg.delete()
         
-        msg = await send_clean(bot, chat_id, "📥 Downloading Video/Reel...")
+        # Clear user data
+        if msg.from_user.id in user_data:
+            del user_data[msg.from_user.id]
+            
+    except Exception as e:
+        await progress_msg.edit(f"❌ Error: {str(e)}")
 
-        try:
-            # Download video in executor to avoid blocking
-            file_info = await asyncio.get_event_loop().run_in_executor(
-                None, download_video_with_ytdlp, url
-            )
-            
-            if not file_info:
-                await msg.edit("❌ Failed to download video.")
-                return
-            
-            file_path, file_name, filesize = file_info
-            cap = f"{file_name}\n\n💽 Size: {filesize}"
-            
-            await msg.edit(f"📥 Downloaded: {file_name}")
-            await msg.edit("🚀 Uploading video...")
-            
-            c_time = time.time()
-            await bot.send_video(
-                chat_id, 
-                video=file_path, 
-                caption=cap, 
-                progress=progress_message, 
-                progress_args=("Upload Started..... Thanks To All Who Supported ❤", msg, c_time)
-            )
-            
-            # Cleanup in executor
-            await asyncio.get_event_loop().run_in_executor(None, os.remove, file_path)
-            
-        except Exception as e:
-            await msg.edit(f"❌ Error downloading video: {e}")
-        
-        finally:
-            try:
-                await msg.delete()
-            except:
-                pass
-            INSTADL_STATE.pop(chat_id, None)
-
-def setup_video_folder():
-    """Setup video folder - runs in executor"""
-    os.makedirs(VIDEO_FOLDER, exist_ok=True)
-    for f in os.listdir(VIDEO_FOLDER):
-        try:
-            os.remove(os.path.join(VIDEO_FOLDER, f))
-        except:
-            pass
-
-def download_video_with_ytdlp(url):
-    """Download video with yt-dlp - runs in executor"""
+async def download_video(bot, msg, url):
     try:
+        if not cookies_file:
+            return await msg.edit("❌ Cookies file not found. Please add cookies.json to your git repo.")
+        
+        # Create folder
+        folder = os.path.join(DOWNLOAD_LOCATION, f"video_{int(time.time())}")
+        os.makedirs(folder, exist_ok=True)
+        
+        # Progress tracking
+        progress_msg = msg
+        download_progress = {"downloaded": 0, "total": 0, "filename": ""}
+        
+        def progress_hook(d):
+            if d['status'] == 'downloading':
+                if 'total_bytes' in d:
+                    download_progress["total"] = d['total_bytes']
+                    download_progress["downloaded"] = d['downloaded_bytes']
+                elif 'total_bytes_estimate' in d:
+                    download_progress["total"] = d['total_bytes_estimate']
+                    download_progress["downloaded"] = d['downloaded_bytes']
+                    
+            elif d['status'] == 'finished':
+                download_progress["filename"] = os.path.basename(d['filename'])
+        
+        # yt-dlp options
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
-            "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
+            "outtmpl": os.path.join(folder, "%(title)s.%(ext)s"),
+            "cookies": cookies_file,
             "merge_output_format": "mp4",
-            "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
-            "quiet": True,
+            "progress_hooks": [progress_hook]
         }
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        # Download in thread to avoid blocking
+        def download_video_sync():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
         
-        files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
-        if not files:
-            return None
+        # Run download in executor
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(download_video_sync)
+            
+            # Monitor progress
+            while not future.done():
+                if download_progress["total"] > 0:
+                    percent = (download_progress["downloaded"] / download_progress["total"]) * 100
+                    downloaded_size = humanbytes(download_progress["downloaded"])
+                    total_size = humanbytes(download_progress["total"])
+                    
+                    progress_text = f"🔄 Downloading your video/reel...\n📊 {percent:.1f}%\n💾 {downloaded_size} / {total_size}"
+                    
+                    try:
+                        await progress_msg.edit(progress_text)
+                    except:
+                        pass
+                
+                await asyncio.sleep(2)
+            
+            # Wait for completion
+            future.result()
         
-        file_path = os.path.join(VIDEO_FOLDER, files[0])
-        file_name = files[0]
-        filesize = humanbytes(os.path.getsize(file_path))
+        # Get downloaded file
+        files_in_folder = os.listdir(folder)
+        if not files_in_folder:
+            return await progress_msg.edit("❌ No file was downloaded")
         
-        return file_path, file_name, filesize
-    
+        video_file = os.path.join(folder, files_in_folder[0])
+        file_size = os.path.getsize(video_file)
+        
+        # Get filename without extension for caption
+        filename = os.path.splitext(files_in_folder[0])[0]
+        
+        # Upload video
+        await progress_msg.edit("🚀 Uploading...")
+        
+        caption = f"🎥 {filename}\n💽 Size: {humanbytes(file_size)}"
+        
+        c_time = time.time()
+        await bot.send_video(
+            msg.chat.id,
+            video=video_file,
+            caption=caption,
+            progress=progress_message,
+            progress_args=("Upload Started..... Thanks To All Who Supported ❤", progress_msg, c_time)
+        )
+        
+        # Cleanup
+        import shutil
+        shutil.rmtree(folder)
+        await progress_msg.delete()
+        
+        # Clear user data
+        if msg.from_user.id in user_data:
+            del user_data[msg.from_user.id]
+            
     except Exception as e:
-        print(f"yt-dlp download error: {e}")
-        return None
+        await msg.edit(f"❌ Error: {str(e)}")
+
+# Add required imports to your main bot file or requirements
+"""
+Required packages in requirements.txt:
+instaloader
+yt-dlp
+"""
