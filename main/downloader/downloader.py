@@ -136,9 +136,10 @@ async def yt_callback_handler(bot, query):
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
     # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+    )
 
-    
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
@@ -147,14 +148,12 @@ async def yt_callback_handler(bot, query):
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }]
-        
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
-        
     except Exception as e:
         await download_message.edit_text(f"❌ **Error during download:** {e}")
         return
@@ -186,13 +185,17 @@ async def yt_callback_handler(bot, query):
     else:
         thumb_path = None
 
-    caption = (
-        f"**🎞 {info_dict['title']}   |   [🔗 URL]({url})**\n\n"
-        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"                     
-    )
+    # ✅ Only caption changed to blockquote
+    caption = f"""
+<blockquote><b>🎞 Title:</b> {info_dict['title']}</blockquote>
+<blockquote><b>🔗 URL:</b> <a href="{url}">Click Here</a></blockquote>
+<blockquote><b>🎥 Resolution:</b> {resolution}</blockquote>
+<blockquote><b>🗂 Filesize:</b> {filesize}</blockquote>
+"""
 
     # Delete the "Download started" message and update the caption to "Uploading started"
     await download_message.delete()
+
 
     uploading_message = await bot.send_photo(
         chat_id=query.message.chat.id,
@@ -207,6 +210,7 @@ async def yt_callback_handler(bot, query):
             video=downloaded_path,
             thumb=thumb_path,
             caption=caption,
+            parse_mode+"HTML",
             duration=duration,
             progress=progress_message,
             progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
