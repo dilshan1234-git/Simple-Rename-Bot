@@ -1,5 +1,6 @@
 import os
 import time
+import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -11,17 +12,19 @@ from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 
 # Global variables to track progress
-progress_data = {}
+download_progress = {}
 
 def create_progress_bar(percentage):
     """Create a visual progress bar"""
-    filled = int(percentage / 10)
-    empty = 10 - filled
+    filled = int(percentage / 5)  # 20 segments for more precision
+    empty = 20 - filled
     bar = "█" * filled + "░" * empty
     return f"[{bar}] {percentage:.1f}%"
 
 def format_time(seconds):
     """Convert seconds to MM:SS format"""
+    if seconds is None or seconds <= 0:
+        return "00:00"
     if seconds < 3600:
         return time.strftime('%M:%S', time.gmtime(seconds))
     else:
@@ -29,7 +32,7 @@ def format_time(seconds):
 
 def format_speed(speed_bytes):
     """Format download speed"""
-    if speed_bytes is None:
+    if speed_bytes is None or speed_bytes <= 0:
         return "0 B/s"
     
     if speed_bytes < 1024:
@@ -41,82 +44,133 @@ def format_speed(speed_bytes):
     else:
         return f"{speed_bytes/(1024**3):.1f} GB/s"
 
-async def progress_hook(d, download_message, title, resolution):
-    """Progress hook for yt-dlp downloads"""
-    global progress_data
-    
-    try:
-        if d['status'] == 'downloading':
-            # Extract progress information
-            downloaded = d.get('downloaded_bytes', 0)
-            total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
-            speed = d.get('speed', 0)
-            eta = d.get('eta', 0)
-            
-            if total > 0:
-                percentage = (downloaded / total) * 100
-            else:
-                percentage = 0
-            
-            # Create progress display
-            progress_bar = create_progress_bar(percentage)
-            downloaded_str = humanbytes(downloaded)
-            total_str = humanbytes(total) if total > 0 else "Unknown"
-            speed_str = format_speed(speed)
-            eta_str = format_time(eta) if eta else "Unknown"
-            
-            # Create the progress message
-            progress_text = (
-                f"📥 **Download in Progress...**\n\n"
-                f"**🎞 {title}**\n"
-                f"**📹 {resolution}**\n\n"
-                f"{progress_bar}\n\n"
-                f"**📊 Downloaded:** {downloaded_str} / {total_str}\n"
-                f"**⚡ Speed:** {speed_str}\n"
-                f"**⏱️ ETA:** {eta_str}"
-            )
-            
-            # Update message every 2 seconds to avoid rate limits
-            current_time = time.time()
-            message_id = download_message.id
-            
-            if message_id not in progress_data:
-                progress_data[message_id] = {'last_update': 0}
-            
-            if current_time - progress_data[message_id]['last_update'] >= 2:
-                try:
-                    await download_message.edit_text(progress_text)
-                    progress_data[message_id]['last_update'] = current_time
-                except Exception as e:
-                    # Ignore rate limit errors
-                    pass
+class AsyncProgressHook:
+    def __init__(self, message, title, resolution):
+        self.message = message
+        self.title = title
+        self.resolution = resolution
+        self.last_update = 0
+        self.current_status = ""
+        self.video_downloaded = False
+        self.audio_downloaded = False
+        self.merging = False
         
-        elif d['status'] == 'finished':
-            # Download completed
-            filename = d.get('filename', 'Unknown')
-            file_size = humanbytes(d.get('total_bytes', 0))
+    def __call__(self, d):
+        """Synchronous hook that updates progress data"""
+        try:
+            message_id = self.message.id
+            current_time = time.time()
             
-            completion_text = (
-                f"✅ **Download Completed!**\n\n"
-                f"**🎞 {title}**\n"
-                f"**📹 {resolution}**\n\n"
-                f"**📁 Size:** {file_size}\n"
-                f"**📂 File:** {os.path.basename(filename)}\n\n"
-                f"🔄 **Processing video...**"
-            )
+            # Initialize progress data if not exists
+            if message_id not in download_progress:
+                download_progress[message_id] = {
+                    'last_update': 0,
+                    'status': '',
+                    'data': {}
+                }
             
-            try:
-                await download_message.edit_text(completion_text)
-            except:
-                pass
-            
-            # Clean up progress data
-            if download_message.id in progress_data:
-                del progress_data[download_message.id]
+            # Update progress data
+            if d['status'] == 'downloading':
+                filename = d.get('filename', '')
+                is_video = '.mp4' in filename and '.f' in filename
+                is_audio = '.m4a' in filename or '.webm' in filename
                 
-    except Exception as e:
-        # Handle any errors silently to avoid breaking the download
-        pass
+                downloaded = d.get('downloaded_bytes', 0)
+                total = d.get('total_bytes') or d.get('total_bytes_estimate', 0)
+                speed = d.get('speed', 0)
+                eta = d.get('eta', 0)
+                
+                percentage = (downloaded / total * 100) if total > 0 else 0
+                
+                # Determine current phase
+                if is_video and not self.video_downloaded:
+                    phase = "📹 Downloading Video..."
+                elif is_audio and not self.audio_downloaded:
+                    phase = "🎵 Downloading Audio..."
+                else:
+                    phase = "📥 Downloading..."
+                
+                progress_bar = create_progress_bar(percentage)
+                downloaded_str = humanbytes(downloaded)
+                total_str = humanbytes(total) if total > 0 else "Unknown"
+                speed_str = format_speed(speed)
+                eta_str = format_time(eta)
+                
+                status_text = (
+                    f"{phase}\n\n"
+                    f"**🎞 {self.title}**\n"
+                    f"**📹 {self.resolution}**\n\n"
+                    f"{progress_bar}\n\n"
+                    f"**📊 Downloaded:** {downloaded_str} / {total_str}\n"
+                    f"**⚡ Speed:** {speed_str}\n"
+                    f"**⏱️ ETA:** {eta_str}"
+                )
+                
+                # Only update if content changed and enough time passed
+                if (current_time - download_progress[message_id]['last_update'] >= 3 and 
+                    status_text != download_progress[message_id]['status']):
+                    
+                    download_progress[message_id].update({
+                        'status': status_text,
+                        'last_update': current_time,
+                        'data': d.copy()
+                    })
+            
+            elif d['status'] == 'finished':
+                filename = d.get('filename', '')
+                is_video = '.mp4' in filename and '.f' in filename
+                is_audio = '.m4a' in filename or '.webm' in filename
+                
+                if is_video:
+                    self.video_downloaded = True
+                    status_text = (
+                        f"✅ **Video Downloaded Successfully!**\n\n"
+                        f"**🎞 {self.title}**\n"
+                        f"**📹 {self.resolution}**\n\n"
+                        f"📁 **File:** {os.path.basename(filename)}\n"
+                        f"📊 **Size:** {humanbytes(d.get('total_bytes', 0))}\n\n"
+                        f"⏳ **Waiting for audio...**"
+                    )
+                elif is_audio:
+                    self.audio_downloaded = True
+                    status_text = (
+                        f"✅ **Audio Downloaded Successfully!**\n\n"
+                        f"**🎞 {self.title}**\n"
+                        f"**📹 {self.resolution}**\n\n"
+                        f"📁 **File:** {os.path.basename(filename)}\n"
+                        f"📊 **Size:** {humanbytes(d.get('total_bytes', 0))}\n\n"
+                        f"🔄 **Merging video and audio...**"
+                    )
+                else:
+                    status_text = (
+                        f"✅ **Download Completed!**\n\n"
+                        f"**🎞 {self.title}**\n"
+                        f"**📹 {self.resolution}**\n\n"
+                        f"📁 **File:** {os.path.basename(filename)}\n"
+                        f"📊 **Size:** {humanbytes(d.get('total_bytes', 0))}"
+                    )
+                
+                download_progress[message_id].update({
+                    'status': status_text,
+                    'last_update': current_time,
+                    'data': d.copy()
+                })
+                
+        except Exception as e:
+            # Silently handle errors to avoid breaking download
+            pass
+
+async def update_progress_messages():
+    """Background task to update progress messages"""
+    while True:
+        try:
+            for message_id, progress_info in list(download_progress.items()):
+                if progress_info['status'] and progress_info['last_update'] > 0:
+                    # This will be handled by the main download function
+                    pass
+            await asyncio.sleep(2)  # Check every 2 seconds
+        except Exception:
+            pass
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -141,7 +195,7 @@ async def youtube_link_handler(bot, msg):
     processing_message = await msg.reply_text("🔄 **Processing your request...**")
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Prefer AVC/AAC format
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
         'noplaylist': True,
         'quiet': True
     }
@@ -169,20 +223,20 @@ async def youtube_link_handler(bot, msg):
     available_audio = []
 
     for f in formats:
-        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':  # Check for video formats
+        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
             resolution = f"{f['height']}p"
-            fps = f.get('fps', None)  # Get the fps (frames per second)
-            if fps in [50, 60]:  # Append fps to the resolution if it's 50 or 60
+            fps = f.get('fps', None)
+            if fps in [50, 60]:
                 resolution += f"{fps}fps"
-            filesize = f.get('filesize')  # Fetch the filesize
-            if filesize:  # Only process if filesize is not None
-                filesize_str = humanbytes(filesize)  # Convert size to human-readable format
-                format_id = f['format_id']
-                available_resolutions.append((resolution, filesize_str, format_id))
-        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':  # Check for audio formats
             filesize = f.get('filesize')
             if filesize:
-                filesize_str = humanbytes(filesize)  # Show file size instead of bitrate
+                filesize_str = humanbytes(filesize)
+                format_id = f['format_id']
+                available_resolutions.append((resolution, filesize_str, format_id))
+        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
+            filesize = f.get('filesize')
+            if filesize:
+                filesize_str = humanbytes(filesize)
                 format_id = f['format_id']
                 available_audio.append((filesize, filesize_str, format_id))
 
@@ -194,20 +248,20 @@ async def youtube_link_handler(bot, msg):
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
         row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        if len(row) == 2:  # Adjust the number of buttons per row if needed
+        if len(row) == 2:
             buttons.append(row)
             row = []
 
     if row:
         buttons.append(row)
 
-    # Find the highest quality audio based on the largest file size (in bytes)
+    # Find the highest quality audio
     if available_audio:
         highest_quality_audio = max(available_audio, key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000))
-        _, size, format_id = highest_quality_audio  # Extract the size and format_id
+        _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
     
-    # Add description and thumbnail buttons in the same row
+    # Add description and thumbnail buttons
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -250,7 +304,7 @@ async def yt_callback_handler(bot, query):
     # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial download started message with title and resolution
+    # Send initial download started message
     download_message = await query.message.edit_text(
         f"🔄 **Initializing Download...**\n\n"
         f"**🎞 {title}**\n"
@@ -258,38 +312,100 @@ async def yt_callback_handler(bot, query):
         f"⏳ **Preparing download...**"
     )
 
-    # Create a lambda function that captures the required parameters
-    def make_progress_hook(download_message, title, resolution):
-        async def hook(d):
-            await progress_hook(d, download_message, title, resolution)
-        return hook
+    # Create progress hook
+    progress_hook = AsyncProgressHook(download_message, title, resolution)
     
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
+        'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }],
-        'progress_hooks': [make_progress_hook(download_message, title, resolution)]
+        'progress_hooks': [progress_hook]
     }
 
+    # Start download in a separate task and monitor progress
+    async def download_with_progress():
+        loop = asyncio.get_event_loop()
+        
+        def run_download():
+            try:
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=True)
+                    return ydl.prepare_filename(info_dict), info_dict
+            except Exception as e:
+                return None, str(e)
+        
+        # Run download in thread pool
+        try:
+            result = await loop.run_in_executor(None, run_download)
+            return result
+        except Exception as e:
+            return None, str(e)
+
+    # Monitor progress and update message
+    async def monitor_progress():
+        message_id = download_message.id
+        last_status = ""
+        
+        while message_id in download_progress or not hasattr(download_task, '_result'):
+            if message_id in download_progress:
+                progress_info = download_progress[message_id]
+                current_status = progress_info['status']
+                
+                if current_status and current_status != last_status:
+                    try:
+                        await download_message.edit_text(current_status)
+                        last_status = current_status
+                    except Exception:
+                        # Ignore message edit errors
+                        pass
+            
+            await asyncio.sleep(2)
+
+    # Start both tasks
+    download_task = asyncio.create_task(download_with_progress())
+    progress_task = asyncio.create_task(monitor_progress())
+
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            downloaded_path = ydl.prepare_filename(info_dict)
+        # Wait for download to complete
+        downloaded_path, info_or_error = await download_task
+        
+        # Cancel progress monitoring
+        progress_task.cancel()
+        
+        # Clean up progress data
+        message_id = download_message.id
+        if message_id in download_progress:
+            del download_progress[message_id]
+        
+        if downloaded_path is None:
+            await download_message.edit_text(f"❌ **Error during download:** {info_or_error}")
+            return
+        
+        info_dict = info_or_error
         
     except Exception as e:
+        progress_task.cancel()
         await download_message.edit_text(f"❌ **Error during download:** {str(e)}")
         return
+
+    # Update message to show merging complete
+    await download_message.edit_text(
+        f"✅ **Download & Merge Complete!**\n\n"
+        f"**🎞 {title}**\n"
+        f"**📹 {resolution}**\n\n"
+        f"🔄 **Processing video file...**"
+    )
 
     try:
         final_filesize = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
         duration = int(video.duration)
         video_width, video_height = video.size
-        video.close()  # Close the video file to free resources
+        video.close()
         filesize = humanbytes(final_filesize)
     except Exception as e:
         await download_message.edit_text(f"❌ **Error processing video file:** {str(e)}")
@@ -331,10 +447,10 @@ async def yt_callback_handler(bot, query):
 
     # Update message to show upload preparation
     await download_message.edit_text(
-        f"✅ **Download Complete!**\n\n"
+        f"✅ **Ready to Upload!**\n\n"
         f"**🎞 {title}**\n"
         f"**📹 {resolution}**\n\n"
-        f"🚀 **Preparing to upload...**"
+        f"🚀 **Starting upload...**"
     )
 
     uploading_message = await bot.send_photo(
@@ -361,7 +477,7 @@ async def yt_callback_handler(bot, query):
     await uploading_message.delete()
     await download_message.delete()
 
-    # Clean up the downloaded video file and thumbnail after sending
+    # Clean up files
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
@@ -373,10 +489,8 @@ async def audio_callback_handler(bot, query):
     format_id = data[1]
     url = query.data.split('_', 2)[2]
 
-    # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial download started message
     download_message = await query.message.edit_text(
         f"🔄 **Initializing Audio Download...**\n\n"
         f"**🎞 {title}**\n"
@@ -384,30 +498,74 @@ async def audio_callback_handler(bot, query):
         f"⏳ **Preparing download...**"
     )
 
-    # Create progress hook for audio
-    def make_progress_hook(download_message, title):
-        async def hook(d):
-            await progress_hook(d, download_message, title, "Audio")
-        return hook
+    progress_hook = AsyncProgressHook(download_message, title, "Audio")
 
     ydl_opts = {
         'format': format_id,
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
-        'progress_hooks': [make_progress_hook(download_message, title)]
+        'progress_hooks': [progress_hook]
     }
 
+    async def download_with_progress():
+        loop = asyncio.get_event_loop()
+        
+        def run_download():
+            try:
+                with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                    info_dict = ydl.extract_info(url, download=True)
+                    return ydl.prepare_filename(info_dict), info_dict
+            except Exception as e:
+                return None, str(e)
+        
+        try:
+            result = await loop.run_in_executor(None, run_download)
+            return result
+        except Exception as e:
+            return None, str(e)
+
+    async def monitor_progress():
+        message_id = download_message.id
+        last_status = ""
+        
+        while message_id in download_progress or not hasattr(download_task, '_result'):
+            if message_id in download_progress:
+                progress_info = download_progress[message_id]
+                current_status = progress_info['status']
+                
+                if current_status and current_status != last_status:
+                    try:
+                        await download_message.edit_text(current_status)
+                        last_status = current_status
+                    except Exception:
+                        pass
+            
+            await asyncio.sleep(2)
+
+    download_task = asyncio.create_task(download_with_progress())
+    progress_task = asyncio.create_task(monitor_progress())
+
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            downloaded_path = ydl.prepare_filename(info_dict)
+        downloaded_path, info_or_error = await download_task
+        progress_task.cancel()
+        
+        message_id = download_message.id
+        if message_id in download_progress:
+            del download_progress[message_id]
+        
+        if downloaded_path is None:
+            await download_message.edit_text(f"❌ **Error during audio download:** {info_or_error}")
+            return
+        
+        info_dict = info_or_error
+        
     except Exception as e:
+        progress_task.cancel()
         await download_message.edit_text(f"❌ **Error during audio download:** {str(e)}")
         return
 
     final_filesize = os.path.getsize(downloaded_path)
     filesize = humanbytes(final_filesize)
 
-    # Get thumbnail for audio
     thumb_url = info_dict.get('thumbnail', None)
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
     if thumb_url:
@@ -428,7 +586,6 @@ async def audio_callback_handler(bot, query):
         f"🎧 **Audio**   |   🗂 **{filesize}**\n"
     )
 
-    # Update to show upload preparation
     await download_message.edit_text(
         f"✅ **Audio Download Complete!**\n\n"
         f"**🎞 {title}**\n"
@@ -459,7 +616,6 @@ async def audio_callback_handler(bot, query):
     await uploading_message.delete()
     await download_message.delete()
 
-    # Clean up files
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
@@ -499,7 +655,6 @@ async def thumb_callback_handler(bot, query):
 async def description_callback_handler(bot, query):
     url = '_'.join(query.data.split('_')[1:])
 
-    # Extract video information to get the description
     ydl_opts = {'quiet': True}
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -509,7 +664,6 @@ async def description_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error getting description:** {str(e)}")
         return
 
-    # Truncate the description to 4096 characters, the max limit for a text message
     if len(description) > 4096:
         description = description[:4093] + "..."
 
