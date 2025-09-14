@@ -210,7 +210,7 @@ async def yt_callback_handler(bot, query):
             video=downloaded_path,
             thumb=thumb_path,
             caption=caption,
-            parse_mode+"HTML",
+            parse_mode="HTML",
             duration=duration,
             progress=progress_message,
             progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
