@@ -26,7 +26,6 @@ async def ytdl(bot, msg):
 
 # Command to handle YouTube video link and provide resolution/audio options
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
-
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
 
@@ -102,7 +101,6 @@ async def youtube_link_handler(bot, msg):
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
 
-
     markup = InlineKeyboardMarkup(buttons)
 
     caption = (
@@ -134,10 +132,62 @@ async def yt_callback_handler(bot, query):
     # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
-    # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    # Send initial download started message with 0% progress
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**📥 Downloading (0.0%)**"
+    )
 
-    
+    # Store the last update time to throttle Telegram API calls
+    last_update = [time.time()]  # List to allow modification in sync function
+    last_percent = [0.0]  # Track last percentage to reduce redundant updates
+
+    def progress_hook(d):
+        nonlocal last_update, last_percent
+        current_time = time.time()
+        # Throttle updates to avoid Telegram rate limits (e.g., every 0.5 seconds)
+        if current_time - last_update[0] < 0.5:
+            return
+
+        async def update_message(text):
+            try:
+                await download_message.edit_text(text)
+                last_update[0] = current_time
+            except Exception as e:
+                print(f"Error updating Telegram message: {e}")
+
+        import asyncio
+        if d['status'] == 'downloading':
+            percent = d.get('_percent_str', 'Unknown').strip().replace('%', '')
+            try:
+                percent_val = float(percent) if percent != 'Unknown' else 0.0
+                percent = f"{percent_val:.1f}%"
+            except ValueError:
+                percent_val = 0.0
+                percent = 'Unknown'
+            # Skip update if percentage hasn't changed significantly
+            if abs(percent_val - last_percent[0]) < 1.0 and percent != 'Unknown':
+                return
+            last_percent[0] = percent_val
+            # Check if downloading video or audio based on format_id or filename
+            if d.get('info_dict', {}).get('format_id', '') == format_id:
+                stage = f"📹 Downloading video ({percent})"
+            elif 'm4a' in d.get('filename', '').lower() or 'audio' in d.get('info_dict', {}).get('format', '').lower():
+                stage = f"🎧 Downloading audio ({percent})"
+            else:
+                stage = f"📥 Downloading ({percent})"
+            print(f"Progress: {stage}")  # Log to Colab
+            asyncio.run_coroutine_threadsafe(
+                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
+                bot.loop
+            )
+        elif d['status'] == 'processing':
+            stage = "🔄 Merging video and audio"
+            print(f"Progress: {stage}")  # Log to Colab
+            asyncio.run_coroutine_threadsafe(
+                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
+                bot.loop
+            )
+
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
@@ -145,8 +195,10 @@ async def yt_callback_handler(bot, query):
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }]
-        
+        }],
+        'progress_hooks': [progress_hook],  # Add progress hook
+        'quiet': False,  # Allow logs to debug
+        'noprogress': False  # Ensure progress is reported
     }
 
     try:
@@ -215,7 +267,6 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
-
 
     # Clean up the downloaded video file and thumbnail after sending
     if os.path.exists(downloaded_path):
