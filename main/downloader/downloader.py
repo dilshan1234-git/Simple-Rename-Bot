@@ -132,10 +132,13 @@ async def yt_callback_handler(bot, query):
     # Get the title from the original message caption
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
+    chat_id = query.message.chat.id
+
     # Send initial download started message with 0% progress
     download_message = await query.message.edit_text(
         f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**📥 Downloading (0.0%)**"
     )
+    message_id = download_message.id
 
     # Store the last update time to throttle Telegram API calls
     last_update = [time.time()]  # List to allow modification in sync function
@@ -150,22 +153,29 @@ async def yt_callback_handler(bot, query):
 
         async def update_message(text):
             try:
-                await download_message.edit_text(text)
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=text
+                )
                 last_update[0] = current_time
             except Exception as e:
                 print(f"Error updating Telegram message: {e}")
 
         import asyncio
         if d['status'] == 'downloading':
-            percent = d.get('_percent_str', 'Unknown').strip().replace('%', '')
-            try:
-                percent_val = float(percent) if percent != 'Unknown' else 0.0
-                percent = f"{percent_val:.1f}%"
-            except ValueError:
-                percent_val = 0.0
-                percent = 'Unknown'
+            percent_val = 0.0
+            if '_percent_str' in d:
+                percent_str = d['_percent_str'].strip().replace('%', '')
+                try:
+                    percent_val = float(percent_str)
+                except ValueError:
+                    percent_val = 0.0
+            elif d.get('downloaded_bytes') and d.get('total_bytes'):
+                percent_val = (d['downloaded_bytes'] / d['total_bytes']) * 100
+            percent = f"{percent_val:.1f}%"
             # Skip update if percentage hasn't changed significantly
-            if abs(percent_val - last_percent[0]) < 1.0 and percent != 'Unknown':
+            if abs(percent_val - last_percent[0]) < 1.0 and percent != '0.0%':
                 return
             last_percent[0] = percent_val
             # Check if downloading video or audio based on format_id or filename
@@ -175,14 +185,12 @@ async def yt_callback_handler(bot, query):
                 stage = f"🎧 Downloading audio ({percent})"
             else:
                 stage = f"📥 Downloading ({percent})"
-            print(f"Progress: {stage}")  # Log to Colab
             asyncio.run_coroutine_threadsafe(
                 update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
                 bot.loop
             )
         elif d['status'] == 'processing':
             stage = "🔄 Merging video and audio"
-            print(f"Progress: {stage}")  # Log to Colab
             asyncio.run_coroutine_threadsafe(
                 update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
                 bot.loop
@@ -197,8 +205,6 @@ async def yt_callback_handler(bot, query):
             'preferedformat': 'mp4'
         }],
         'progress_hooks': [progress_hook],  # Add progress hook
-        'quiet': False,  # Allow logs to debug
-        'noprogress': False  # Ensure progress is reported
     }
 
     try:
@@ -207,7 +213,7 @@ async def yt_callback_handler(bot, query):
             downloaded_path = ydl.prepare_filename(info_dict)
         
     except Exception as e:
-        await download_message.edit_text(f"❌ **Error during download:** {e}")
+        await bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=f"❌ **Error during download:** {e}")
         return
 
     final_filesize = os.path.getsize(downloaded_path)
@@ -243,7 +249,7 @@ async def yt_callback_handler(bot, query):
     )
 
     # Delete the "Download started" message and update the caption to "Uploading started"
-    await download_message.delete()
+    await bot.delete_messages(chat_id=chat_id, message_ids=message_id)
 
     uploading_message = await bot.send_photo(
         chat_id=query.message.chat.id,
