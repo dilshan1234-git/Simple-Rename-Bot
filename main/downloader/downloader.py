@@ -1,4 +1,3 @@
-
 import os
 import time
 import requests
@@ -27,7 +26,6 @@ async def ytdl(bot, msg):
 
 # Command to handle YouTube video link and provide resolution/audio options
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
-
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
 
@@ -103,7 +101,6 @@ async def youtube_link_handler(bot, msg):
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
 
-
     markup = InlineKeyboardMarkup(buttons)
 
     caption = (
@@ -138,7 +135,39 @@ async def yt_callback_handler(bot, query):
     # Send initial download started message with title and resolution
     download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
 
-    
+    async def progress_hook(d):
+        if d['status'] == 'downloading':
+            if '_percent_str' in d:
+                # Extract progress percentage and clean it
+                percent = d['_percent_str'].strip().replace('%', '')
+                try:
+                    percent = float(percent)
+                    percent = f"{percent:.1f}%"
+                except ValueError:
+                    percent = 'Unknown'
+                # Determine if it's video or audio based on filename or format
+                if 'video' in d.get('info_dict', {}).get('format', '').lower():
+                    stage = f"📹 Downloading video ({percent})"
+                elif 'audio' in d.get('info_dict', {}).get('format', '').lower():
+                    stage = f"🎧 Downloading audio ({percent})"
+                else:
+                    stage = f"📥 Downloading ({percent})"
+                await download_message.edit_text(
+                    f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"
+                )
+            elif d.get('downloaded_bytes') and d.get('total_bytes'):
+                # Fallback to calculating percentage from bytes
+                percent = (d['downloaded_bytes'] / d['total_bytes']) * 100
+                percent = f"{percent:.1f}%"
+                stage = f"📥 Downloading ({percent})"
+                await download_message.edit_text(
+                    f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"
+                )
+        elif d['status'] == 'processing':
+            await download_message.edit_text(
+                f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**🔄 Merging video and audio**"
+            )
+
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
@@ -146,8 +175,8 @@ async def yt_callback_handler(bot, query):
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }]
-        
+        }],
+        'progress_hooks': [progress_hook]  # Add progress hook
     }
 
     try:
@@ -216,7 +245,6 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
-
 
     # Clean up the downloaded video file and thumbnail after sending
     if os.path.exists(downloaded_path):
