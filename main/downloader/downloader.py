@@ -26,6 +26,7 @@ async def ytdl(bot, msg):
 
 # Command to handle YouTube video link and provide resolution/audio options
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
+
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
 
@@ -101,6 +102,7 @@ async def youtube_link_handler(bot, msg):
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
 
+
     markup = InlineKeyboardMarkup(buttons)
 
     caption = (
@@ -135,47 +137,7 @@ async def yt_callback_handler(bot, query):
     # Send initial download started message with title and resolution
     download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
 
-    # Store the last update time to throttle Telegram API calls
-    last_update = [time.time()]  # List to allow modification in sync function
-
-    def progress_hook(d):
-        nonlocal last_update
-        current_time = time.time()
-        # Throttle updates to avoid Telegram rate limits (e.g., every 1 second)
-        if current_time - last_update[0] < 1:
-            return
-
-        async def update_message(text):
-            try:
-                await download_message.edit_text(text)
-                last_update[0] = current_time
-            except Exception as e:
-                print(f"Error updating Telegram message: {e}")
-
-        import asyncio
-        if d['status'] == 'downloading':
-            percent = d.get('_percent_str', 'Unknown').strip().replace('%', '')
-            try:
-                percent = f"{float(percent):.1f}%" if percent != 'Unknown' else 'Unknown'
-            except ValueError:
-                percent = 'Unknown'
-            # Check if downloading video or audio based on format_id or filename
-            if d.get('info_dict', {}).get('format_id', '') == format_id:
-                stage = f"📹 Downloading video ({percent})"
-            elif 'm4a' in d.get('filename', '').lower() or 'audio' in d.get('info_dict', {}).get('format', '').lower():
-                stage = f"🎧 Downloading audio ({percent})"
-            else:
-                stage = f"📥 Downloading ({percent})"
-            asyncio.run_coroutine_threadsafe(
-                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
-                bot.loop
-            )
-        elif d['status'] == 'processing':
-            asyncio.run_coroutine_threadsafe(
-                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**🔄 Merging video and audio**"),
-                bot.loop
-            )
-
+    
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
@@ -183,10 +145,8 @@ async def yt_callback_handler(bot, query):
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
-        }],
-        'progress_hooks': [progress_hook],  # Add progress hook
-        'quiet': False,  # Allow logs to debug
-        'verbose': True  # Enable verbose output for debugging
+        }]
+        
     }
 
     try:
@@ -255,6 +215,7 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
+
 
     # Clean up the downloaded video file and thumbnail after sending
     if os.path.exists(downloaded_path):
