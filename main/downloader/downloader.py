@@ -135,37 +135,45 @@ async def yt_callback_handler(bot, query):
     # Send initial download started message with title and resolution
     download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
 
-    async def progress_hook(d):
+    # Store the last update time to throttle Telegram API calls
+    last_update = [time.time()]  # List to allow modification in sync function
+
+    def progress_hook(d):
+        nonlocal last_update
+        current_time = time.time()
+        # Throttle updates to avoid Telegram rate limits (e.g., every 1 second)
+        if current_time - last_update[0] < 1:
+            return
+
+        async def update_message(text):
+            try:
+                await download_message.edit_text(text)
+                last_update[0] = current_time
+            except Exception as e:
+                print(f"Error updating Telegram message: {e}")
+
+        import asyncio
         if d['status'] == 'downloading':
-            if '_percent_str' in d:
-                # Extract progress percentage and clean it
-                percent = d['_percent_str'].strip().replace('%', '')
-                try:
-                    percent = float(percent)
-                    percent = f"{percent:.1f}%"
-                except ValueError:
-                    percent = 'Unknown'
-                # Determine if it's video or audio based on filename or format
-                if 'video' in d.get('info_dict', {}).get('format', '').lower():
-                    stage = f"📹 Downloading video ({percent})"
-                elif 'audio' in d.get('info_dict', {}).get('format', '').lower():
-                    stage = f"🎧 Downloading audio ({percent})"
-                else:
-                    stage = f"📥 Downloading ({percent})"
-                await download_message.edit_text(
-                    f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"
-                )
-            elif d.get('downloaded_bytes') and d.get('total_bytes'):
-                # Fallback to calculating percentage from bytes
-                percent = (d['downloaded_bytes'] / d['total_bytes']) * 100
-                percent = f"{percent:.1f}%"
+            percent = d.get('_percent_str', 'Unknown').strip().replace('%', '')
+            try:
+                percent = f"{float(percent):.1f}%" if percent != 'Unknown' else 'Unknown'
+            except ValueError:
+                percent = 'Unknown'
+            # Check if downloading video or audio based on format_id or filename
+            if d.get('info_dict', {}).get('format_id', '') == format_id:
+                stage = f"📹 Downloading video ({percent})"
+            elif 'm4a' in d.get('filename', '').lower() or 'audio' in d.get('info_dict', {}).get('format', '').lower():
+                stage = f"🎧 Downloading audio ({percent})"
+            else:
                 stage = f"📥 Downloading ({percent})"
-                await download_message.edit_text(
-                    f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"
-                )
+            asyncio.run_coroutine_threadsafe(
+                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**{stage}**"),
+                bot.loop
+            )
         elif d['status'] == 'processing':
-            await download_message.edit_text(
-                f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**🔄 Merging video and audio**"
+            asyncio.run_coroutine_threadsafe(
+                update_message(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**\n\n**🔄 Merging video and audio**"),
+                bot.loop
             )
 
     ydl_opts = {
@@ -176,7 +184,9 @@ async def yt_callback_handler(bot, query):
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }],
-        'progress_hooks': [progress_hook]  # Add progress hook
+        'progress_hooks': [progress_hook],  # Add progress hook
+        'quiet': False,  # Allow logs to debug
+        'verbose': True  # Enable verbose output for debugging
     }
 
     try:
