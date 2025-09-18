@@ -147,7 +147,9 @@ async def yt_callback_handler(bot, query):
     url = query.data.split('_', 3)[3]
 
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
+    )
 
     c_time = [time.time()]
 
@@ -155,9 +157,8 @@ async def yt_callback_handler(bot, query):
         'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [lambda d: asyncio.run_coroutine_threadsafe(
-            ytdl_progress_hook(d, download_message, c_time),
-            bot.loop
+        'progress_hooks': [lambda d: bot.loop.create_task(
+            ytdl_progress_hook(d, download_message, c_time)
         )],
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
