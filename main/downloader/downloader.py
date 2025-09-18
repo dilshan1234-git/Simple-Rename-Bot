@@ -135,7 +135,7 @@ async def yt_callback_handler(bot, query):
     title = query.message.caption.split('🎞 ')[1].split('\n')[0]
 
     # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**")
+    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**", parse_mode=enums.ParseMode.MARKDOWN)
 
     # Initialize the YTDLProgress class
     progress = YTDLProgress(bot, download_message, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
@@ -150,11 +150,12 @@ async def yt_callback_handler(bot, query):
         }],
         'progress_hooks': [progress.hook],  # Add the progress hook
         'noplaylist': True,  # Ensure no playlist processing
-        'quiet': True,  # Suppress verbose output to avoid unreliable progress
-        'no_warnings': True,  # Suppress warnings that might interfere
+        'quiet': True,  # Suppress verbose output
+        'no_warnings': True,  # Suppress warnings
+        'noprogress': True,  # Disable console progress output
         'retries': 10,  # Retry on transient errors
         'fragment_retries': 10,  # Retry on fragment download failures
-        'skip_unavailable_fragments': True  # Skip unavailable fragments to avoid errors
+        'skip_unavailable_fragments': True  # Skip unavailable fragments
     }
 
     try:
@@ -165,7 +166,7 @@ async def yt_callback_handler(bot, query):
                 raise Exception("Downloaded file not found")
         
     except Exception as e:
-        await download_message.edit_text(f"❌ **Error during download:** {str(e)}")
+        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     try:
@@ -175,7 +176,7 @@ async def yt_callback_handler(bot, query):
         video_width, video_height = video.size
         filesize = humanbytes(final_filesize)
     except Exception as e:
-        await download_message.edit_text(f"❌ **Error processing video:** {str(e)}")
+        await download_message.edit_text(f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     thumb_url = info_dict.get('thumbnail', None)
@@ -213,10 +214,12 @@ async def yt_callback_handler(bot, query):
     uploading_message = await bot.send_photo(
         chat_id=query.message.chat.id,
         photo=thumb_path,
-        caption="🚀 **Uploading started...** 📤"
+        caption="🚀 **Uploading started...** 📤",
+        parse_mode=enums.ParseMode.MARKDOWN
     ) if thumb_path else await bot.send_message(
         chat_id=query.message.chat.id,
-        text="🚀 **Uploading started...** 📤"
+        text="🚀 **Uploading started...** 📤",
+        parse_mode=enums.ParseMode.MARKDOWN
     )
 
     c_time = time.time()
@@ -231,7 +234,7 @@ async def yt_callback_handler(bot, query):
             progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
         )
     except Exception as e:
-        await uploading_message.edit_text(f"❌ **Error during upload:** {str(e)}")
+        await uploading_message.edit_text(f"❌ **Error during upload:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     await uploading_message.delete()
@@ -252,7 +255,7 @@ async def thumb_callback_handler(bot, query):
         thumb_url = info_dict.get('thumbnail', None)
 
     if not thumb_url:
-        await query.message.edit_text("❌ **No thumbnail found for this video.**")
+        await query.message.edit_text("❌ **No thumbnail found for this video.**", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     thumb_response = requests.get(thumb_url)
@@ -263,7 +266,7 @@ async def thumb_callback_handler(bot, query):
         await bot.send_photo(chat_id=query.message.chat.id, photo=thumb_path)
         os.remove(thumb_path)
     else:
-        await query.message.edit_text("❌ **Failed to download thumbnail.**")
+        await query.message.edit_text("❌ **Failed to download thumbnail.**", parse_mode=enums.ParseMode.MARKDOWN)
 
 @Client.on_callback_query(filters.regex(r'^desc_https?://(www\.)?youtube\.com/watch\?v='))
 async def description_callback_handler(bot, query):
@@ -279,4 +282,4 @@ async def description_callback_handler(bot, query):
     if len(description) > 4096:
         description = description[:4093] + "..."
 
-    await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}")
+    await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}", parse_mode=enums.ParseMode.MARKDOWN)
