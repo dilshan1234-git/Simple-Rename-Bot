@@ -2,6 +2,7 @@ import time
 import math
 import asyncio
 import logging
+from pyrogram import enums  # Import enums from pyrogram
 from main.utils import humanbytes
 
 # Set up logging to debug issues with message updates
