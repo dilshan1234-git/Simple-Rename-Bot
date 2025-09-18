@@ -30,12 +30,13 @@ async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
 
     # Send processing message
-    processing_message = await msg.reply_text("🔄 **Processing your request...**")
+    processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
 
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Prefer AVC/AAC format
         'noplaylist': True,
-        'quiet': True
+        'quiet': True,
+        'no_warnings': True,
     }
 
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -116,7 +117,7 @@ async def youtube_link_handler(bot, msg):
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
     with open(thumb_path, 'wb') as thumb_file:
         thumb_file.write(thumb_response.content)
-    await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup)
+    await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, parse_mode=enums.ParseMode.MARKDOWN)
     os.remove(thumb_path)
 
     await msg.delete()
@@ -132,10 +133,16 @@ async def yt_callback_handler(bot, query):
     url = query.data.split('_', 3)[3]
 
     # Get the title from the original message caption
-    title = query.message.caption.split('🎞 ')[1].split('\n')[0]
+    try:
+        title = query.message.caption.split('🎞 ')[1].split('\n')[0]
+    except IndexError:
+        title = "Unknown Title"
 
     # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**", parse_mode=enums.ParseMode.MARKDOWN)
+    download_message = await query.message.edit_text(
+        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
+        parse_mode=enums.ParseMode.MARKDOWN
+    )
 
     # Initialize the YTDLProgress class
     progress = YTDLProgress(bot, download_message, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
@@ -248,7 +255,7 @@ async def yt_callback_handler(bot, query):
 @Client.on_callback_query(filters.regex(r'^thumb_https?://(www\.)?youtube\.com/watch\?v='))
 async def thumb_callback_handler(bot, query):
     url = '_'.join(query.data.split('_')[1:])
-    ydl_opts = {'quiet': True}
+    ydl_opts = {'quiet': True, 'no_warnings': True}
 
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=False)
@@ -263,7 +270,7 @@ async def thumb_callback_handler(bot, query):
         thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
         with open(thumb_path, 'wb') as thumb_file:
             thumb_file.write(thumb_response.content)
-        await bot.send_photo(chat_id=query.message.chat.id, photo=thumb_path)
+        await bot.send_photo(chat_id=query.message.chat.id, photo=thumb_path, parse_mode=enums.ParseMode.MARKDOWN)
         os.remove(thumb_path)
     else:
         await query.message.edit_text("❌ **Failed to download thumbnail.**", parse_mode=enums.ParseMode.MARKDOWN)
@@ -273,7 +280,7 @@ async def description_callback_handler(bot, query):
     url = '_'.join(query.data.split('_')[1:])
 
     # Extract video information to get the description
-    ydl_opts = {'quiet': True}
+    ydl_opts = {'quiet': True, 'no_warnings': True}
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=False)
         description = info_dict.get('description', 'No description available.')
