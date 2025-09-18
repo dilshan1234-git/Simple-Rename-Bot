@@ -2,6 +2,7 @@ import os
 import time
 import requests
 import asyncio
+from queue import Queue, Empty
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -151,28 +152,88 @@ async def yt_callback_handler(bot, query):
         f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**"
     )
 
-    c_time = [time.time()]
+    # Thread-safe queue for progress updates
+    progress_queue = Queue()
+    FINISHED_MARKER = "__YTDL_FINISHED__"
 
+    # Progress hook for yt-dlp (runs in worker thread)
+    def progress_hook(d):
+        status = d.get('status')
+        if status == 'downloading':
+            percent = d.get('_percent_str', '').strip()
+            speed = d.get('_speed_str', '').strip()
+            eta = d.get('_eta_str', '').strip()
+            total = d.get('_total_bytes_str', '') or d.get('_total_bytes_estimate_str', '')
+            downloaded = d.get('_downloaded_bytes_str', '')
+
+            text = (
+                f"📥 **Downloading...**\n\n"
+                f"✅ Progress: {percent}\n"
+                f"📦 Size: {total}\n"
+                f"⬇️ Downloaded: {downloaded}\n"
+                f"⚡ Speed: {speed}\n"
+                f"⏳ ETA: {eta}"
+            )
+            try:
+                progress_queue.put_nowait(text)
+            except Exception:
+                pass
+
+        elif status == 'finished':
+            try:
+                progress_queue.put_nowait("✅ **Download complete!**\n🔄 Preparing file...")
+                progress_queue.put_nowait(FINISHED_MARKER)
+            except Exception:
+                pass
+
+    # Async updater task
+    async def progress_updater():
+        last_text = None
+        while True:
+            try:
+                while True:
+                    item = progress_queue.get_nowait()
+                    last_text = item
+            except Empty:
+                pass
+
+            if last_text and last_text != FINISHED_MARKER:
+                try:
+                    await download_message.edit_text(last_text)
+                except Exception:
+                    pass
+
+            if last_text == FINISHED_MARKER:
+                break
+
+            await asyncio.sleep(2)
+
+    # yt-dlp options
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [lambda d: bot.loop.create_task(
-            ytdl_progress_hook(d, download_message, c_time)
-        )],
-        'postprocessors': [{
-            'key': 'FFmpegVideoConvertor',
-            'preferedformat': 'mp4'
-        }]
+        'progress_hooks': [progress_hook],
+        'postprocessors': [{'key': 'FFmpegVideoConvertor', 'preferedformat': 'mp4'}]
     }
+
+    progress_task = asyncio.create_task(progress_updater())
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
     except Exception as e:
+        try: progress_queue.put_nowait(FINISHED_MARKER)
+        except: pass
+        await progress_task
         await download_message.edit_text(f"❌ **Error during download:** {e}")
         return
+
+    try:
+        progress_queue.put_nowait(FINISHED_MARKER)
+    except: pass
+    await progress_task
 
     final_filesize = os.path.getsize(downloaded_path)
     video = VideoFileClip(downloaded_path)
@@ -228,7 +289,6 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
-
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
