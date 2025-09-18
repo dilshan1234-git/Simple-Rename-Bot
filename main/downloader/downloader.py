@@ -141,49 +141,64 @@ async def yt_callback_handler(bot, query):
     progress = YTDLProgress(bot, download_message, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
 
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]",  # Ensure AVC video and AAC audio
+        'format': f"{format_id}+bestaudio[ext=m4a]/best",  # Fallback to 'best' if format fails
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }],
-        'progress_hooks': [progress.hook]  # Add the progress hook
+        'progress_hooks': [progress.hook],  # Add the progress hook
+        'noplaylist': True,  # Ensure no playlist processing
+        'quiet': True,  # Suppress verbose output to avoid unreliable progress
+        'no_warnings': True,  # Suppress warnings that might interfere
+        'retries': 10,  # Retry on transient errors
+        'fragment_retries': 10,  # Retry on fragment download failures
+        'skip_unavailable_fragments': True  # Skip unavailable fragments to avoid errors
     }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             downloaded_path = ydl.prepare_filename(info_dict)
+            if not os.path.exists(downloaded_path):
+                raise Exception("Downloaded file not found")
         
     except Exception as e:
-        await download_message.edit_text(f"❌ **Error during download:** {e}")
+        await download_message.edit_text(f"❌ **Error during download:** {str(e)}")
         return
 
-    final_filesize = os.path.getsize(downloaded_path)
-    video = VideoFileClip(downloaded_path)
-    duration = int(video.duration)
-    video_width, video_height = video.size
-    filesize = humanbytes(final_filesize)
+    try:
+        final_filesize = os.path.getsize(downloaded_path)
+        video = VideoFileClip(downloaded_path)
+        duration = int(video.duration)
+        video_width, video_height = video.size
+        filesize = humanbytes(final_filesize)
+    except Exception as e:
+        await download_message.edit_text(f"❌ **Error processing video:** {str(e)}")
+        return
 
     thumb_url = info_dict.get('thumbnail', None)
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-    response = requests.get(thumb_url)
-    if response.status_code == 200:
-        with open(thumb_path, 'wb') as thumb_file:
-            thumb_file.write(response.content)
+    if thumb_url:
+        response = requests.get(thumb_url)
+        if response.status_code == 200:
+            with open(thumb_path, 'wb') as thumb_file:
+                thumb_file.write(response.content)
 
-        with Image.open(thumb_path) as img:
-            img_width, img_height = img.size
-            scale_factor = max(video_width / img_width, video_height / img_height)
-            new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
-            img = img.resize(new_size, Image.LANCZOS)
-            left = (img.width - video_width) / 2
-            top = (img.height - video_height) / 2
-            right = (img.width + video_width) / 2
-            bottom = (img.height + video_height) / 2
-            img = img.crop((left, top, right, bottom))
-            img.save(thumb_path)
+            with Image.open(thumb_path) as img:
+                img_width, img_height = img.size
+                scale_factor = max(video_width / img_width, video_height / img_height)
+                new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
+                img = img.resize(new_size, Image.LANCZOS)
+                left = (img.width - video_width) / 2
+                top = (img.height - video_height) / 2
+                right = (img.width + video_width) / 2
+                bottom = (img.height + video_height) / 2
+                img = img.crop((left, top, right, bottom))
+                img.save(thumb_path)
+        else:
+            thumb_path = None
     else:
         thumb_path = None
 
@@ -199,6 +214,9 @@ async def yt_callback_handler(bot, query):
         chat_id=query.message.chat.id,
         photo=thumb_path,
         caption="🚀 **Uploading started...** 📤"
+    ) if thumb_path else await bot.send_message(
+        chat_id=query.message.chat.id,
+        text="🚀 **Uploading started...** 📤"
     )
 
     c_time = time.time()
@@ -213,7 +231,7 @@ async def yt_callback_handler(bot, query):
             progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
         )
     except Exception as e:
-        await uploading_message.edit_text(f"❌ **Error during upload:** {e}")
+        await uploading_message.edit_text(f"❌ **Error during upload:** {str(e)}")
         return
 
     await uploading_message.delete()
