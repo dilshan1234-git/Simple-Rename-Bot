@@ -149,8 +149,8 @@ async def yt_callback_handler(bot, query):
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-    # Initialize live progress with YTDLProgress
-    progress = YTDLProgress(bot, query.message.chat.id, query.message.id, prefix_text=f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}")
+    # Initialize live progress with YTDLProgress to edit the current message
+    progress = YTDLProgress(bot, query.message.chat.id, f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", query.message)
     progress.update_task = asyncio.create_task(progress.process_queue())
 
     ydl_opts = {
@@ -181,12 +181,11 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Cleanup downloading progress and show download completed
+    # Cleanup downloading progress and delete the original message
     await progress.cleanup()
-    await query.message.edit_caption(
-        caption=f"✅ **Download Completed!**\n\n🎞 {title}\n📹 {resolution}",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
+    
+    # Delete the original message with download progress
+    await query.message.delete()
 
     # Process video info
     try:
@@ -196,9 +195,9 @@ async def yt_callback_handler(bot, query):
         filesize = humanbytes(final_size)
         video.close()
     except Exception as e:
-        await query.message.edit_caption(
-            caption=f"❌ **Error processing video:** {str(e)}",
-            parse_mode=enums.ParseMode.MARKDOWN
+        await bot.send_message(
+            query.message.chat.id, 
+            f"❌ **Error processing video:** {str(e)}"
         )
         return
 
@@ -211,9 +210,6 @@ async def yt_callback_handler(bot, query):
             thumb_path = os.path.join(DOWNLOAD_LOCATION, 'upload_thumb.jpg')
             with open(thumb_path, 'wb') as f:
                 f.write(resp.content)
-
-    # Delete the download completed message
-    await query.message.delete()
 
     # Send new message for upload with thumbnail
     upload_caption = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}\n📹 {resolution}"
