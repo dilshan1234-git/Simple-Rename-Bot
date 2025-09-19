@@ -70,51 +70,38 @@ async def youtube_link_handler(bot, msg):
     # Collect resolutions and audio
     available_resolutions = {}
     available_audio = []
-
     for f in formats:
         if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
             height = int(f.get('height', 0))
             fps = int(f.get('fps', 0)) if f.get('fps') else None
-
-            # Normal resolution
             resolution = f"{height}p"
-            if resolution not in available_resolutions:
-                available_resolutions[resolution] = []
-
-            # Store format_id and filesize, plus fps
-            available_resolutions[resolution].append({
-                "format_id": f.get('format_id'),
-                "filesize": f.get('filesize') or f.get('filesize_approx'),
-                "fps": fps
-            })
+            # Add FPS only for 720p/1080p and if 50/60fps
+            if height in [720, 1080] and fps in [50, 60]:
+                resolution_fps = f"{height}p{fps}fps"
+                available_resolutions[resolution_fps] = (f.get('format_id'), f.get('filesize') or f.get('filesize_approx'))
+            # Normal resolution
+            available_resolutions[resolution] = (f.get('format_id'), f.get('filesize') or f.get('filesize_approx'))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
             format_id = f.get('format_id')
             if format_id:
-                size_str = humanbytes(filesize) if filesize else 'Unknown'
-                available_audio.append((filesize or 0, size_str, format_id))
+                filesize_str = humanbytes(filesize) if filesize else 'Unknown'
+                available_audio.append((filesize or 0, filesize_str, format_id))
 
-    # Prepare sorted button list
-    sorted_res_keys = sorted(available_resolutions.keys(), key=lambda x: int(x.replace('p','')))
+    # Sort resolutions numerically
+    def res_sort_key(res_name):
+        digits = ''.join(filter(str.isdigit, res_name))
+        return int(digits) if digits else 0
+
+    sorted_resolutions = sorted(available_resolutions.items(), key=lambda x: res_sort_key(x[0]))
+
+    # Build 2-column buttons
     buttons = []
     row = []
-
-    for res in sorted_res_keys:
-        entries = available_resolutions[res]
-
-        # Add normal resolution button
-        normal_entry = next((e for e in entries if e['fps'] not in [50,60]), None)
-        if normal_entry:
-            size_str = humanbytes(normal_entry['filesize']) if normal_entry['filesize'] else 'Unknown'
-            row.append(InlineKeyboardButton(f"📹 {res} - {size_str}", callback_data=f"yt_{normal_entry['format_id']}_{res}_{url}"))
-
-        # Add high-fps button (50/60) if exists
-        fps_entry = next((e for e in entries if e['fps'] in [50,60]), None)
-        if fps_entry:
-            size_str = humanbytes(fps_entry['filesize']) if fps_entry['filesize'] else 'Unknown'
-            row.append(InlineKeyboardButton(f"📹 {res}{fps_entry['fps']}fps - {size_str}", callback_data=f"yt_{fps_entry['format_id']}_{res}{fps_entry['fps']}fps_{url}"))
-
-        if len(row) >= 2:
+    for res_name, (format_id, filesize) in sorted_resolutions:
+        size_str = humanbytes(filesize) if filesize else 'Unknown'
+        row.append(InlineKeyboardButton(f"📹 {res_name} - {size_str}", callback_data=f"yt_{format_id}_{res_name}_{url}"))
+        if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
@@ -122,11 +109,11 @@ async def youtube_link_handler(bot, msg):
 
     # Audio button
     if available_audio:
-        highest_audio = max(available_audio, key=lambda x: x[0])
-        _, size, format_id = highest_audio
+        highest_quality_audio = max(available_audio, key=lambda x: x[0])
+        _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
-    # Thumbnail & Description buttons
+    # Thumbnail & Description
     buttons.append([
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}"),
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}")
@@ -142,7 +129,6 @@ async def youtube_link_handler(bot, msg):
         f"📥 **Select your resolution or audio format:**"
     )
 
-    # Send thumbnail with resolution buttons
     try:
         if thumb_url:
             resp = requests.get(thumb_url)
@@ -170,7 +156,7 @@ async def youtube_link_handler(bot, msg):
     await processing_message.delete()
 
 
-# Download & Upload handler
+# Handle resolution/audio selection
 @Client.on_callback_query(filters.regex(r'^yt_\d+_'))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -180,36 +166,14 @@ async def yt_callback_handler(bot, query):
 
     try:
         title = query.message.caption.split('🎞 ')[1].split('\n')[0]
-    except:
+    except Exception:
         title = "Unknown Title"
 
-    # Download progress message with thumbnail
-    thumb_path = None
-    try:
-        with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
-            info = ydl.extract_info(url, download=False)
-            thumb_url = info.get('thumbnail', None)
-        if thumb_url:
-            resp = requests.get(thumb_url)
-            if resp.status_code == 200:
-                thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-                with open(thumb_path, 'wb') as f:
-                    f.write(resp.content)
-    except:
-        pass
-
-    download_message = await bot.send_photo(
-        chat_id=query.message.chat.id,
-        photo=thumb_path or TELEGRAPH_IMAGE_URL,
-        caption=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
-    if thumb_path and os.path.exists(thumb_path):
-        os.remove(thumb_path)
-
-    # Live download progress
-    progress = YTDLProgress(bot, query.message.chat.id, message=download_message)
+    # Live download progress using YTDLProgress
+    progress = YTDLProgress(bot, query.message.chat.id)
     progress.update_task = asyncio.create_task(progress.process_queue())
+
+    await progress.update_msg(f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -225,8 +189,8 @@ async def yt_callback_handler(bot, query):
 
     def download_video():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            return info_dict, ydl.prepare_filename(info_dict)
+            info = ydl.extract_info(url, download=True)
+            return info, ydl.prepare_filename(info)
 
     loop = asyncio.get_event_loop()
     try:
@@ -236,7 +200,7 @@ async def yt_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Cleanup initial download message
+    # Auto-delete initial download message
     await progress.cleanup()
     await query.message.delete()
 
@@ -245,13 +209,14 @@ async def yt_callback_handler(bot, query):
         final_filesize = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
         duration = int(video.duration)
+        video_width, video_height = video.size
         filesize = humanbytes(final_filesize)
     except Exception as e:
         await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    thumb_url = info_dict.get('thumbnail', None)
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-    thumb_url = info_dict.get('thumbnail')
     if thumb_url:
         resp = requests.get(thumb_url)
         if resp.status_code == 200:
@@ -289,6 +254,7 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
+
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
