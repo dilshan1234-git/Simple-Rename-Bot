@@ -70,8 +70,8 @@ class YTDLProgress:
                         f"📥 **Downloading...**\n\n"
                         f"**Progress:** {percent:.2f}%\n"
                         f"**Downloaded:** {humanbytes(downloaded)} / {humanbytes(total_bytes) if total_bytes else '?'}\n"
-                        f"**Speed:** {humanbytes(speed)}/s\n"
-                        f"**ETA:** {time.strftime('%H:%M:%S', time.gmtime(eta))}"
+                        f"**⚡️ Speed:** {humanbytes(speed)}/s\n"
+                        f"**⏰ ETA:** {time.strftime('%H:%M:%S', time.gmtime(eta))}"
                     )
 
                     self.enqueue(text)
@@ -79,8 +79,8 @@ class YTDLProgress:
             elif d["status"] == "finished":
                 text = (
                     f"✅ **Download Completed!**\n\n"
-                    f"**File:** {d.get('filename', 'Unknown')}\n"
-                    f"**Total Size:** {humanbytes(d.get('total_bytes', 0))}"
+                    f"**📂 File:** {d.get('filename', 'Unknown')}\n\n"
+                    f"**💾 Total Size:** {humanbytes(d.get('total_bytes', 0))}"
                 )
                 self.enqueue(text)
 
