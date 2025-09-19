@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import asyncio
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
