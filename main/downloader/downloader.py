@@ -7,6 +7,7 @@ from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
 from PIL import Image
 import logging
+from concurrent.futures import ThreadPoolExecutor  # Added for non-blocking download
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
@@ -188,8 +189,15 @@ async def yt_callback_handler(bot, query):
     except IndexError:
         title = "Unknown Title"
 
-    # Initialize the YTDLProgress class with chat_id
-    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
+    # Send the "Download started" message as a new text message
+    download_message = await bot.send_message(
+        chat_id=query.message.chat.id,
+        text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
+        parse_mode=enums.ParseMode.MARKDOWN
+    )
+
+    # Initialize the YTDLProgress class with the download_message
+    progress = YTDLProgress(bot, download_message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")  # Note: Using chat_id, but the class will send/edit its own message
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -209,20 +217,29 @@ async def yt_callback_handler(bot, query):
         'skip_unavailable_fragments': True
     }
 
+    loop = asyncio.get_event_loop()
+
     try:
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            downloaded_path = ydl.prepare_filename(info_dict)
-            if not os.path.exists(downloaded_path):
-                raise Exception("Downloaded file not found")
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = loop.run_in_executor(executor, lambda: youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=True))
+            info_dict = await future
+        downloaded_path = youtube_dl.YoutubeDL(ydl_opts).prepare_filename(info_dict)
+        if not os.path.exists(downloaded_path):
+            raise Exception("Downloaded file not found")
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
         await progress.cleanup()
-        await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     # Clean up the progress message after download
     await progress.cleanup()
+
+    # Delete the "Download started" message if not already deleted by cleanup
+    try:
+        await download_message.delete()
+    except Exception:
+        pass
 
     try:
         final_filesize = os.path.getsize(downloaded_path)
