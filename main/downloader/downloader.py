@@ -191,7 +191,7 @@ async def yt_callback_handler(bot, query):
             parse_mode=enums.ParseMode.MARKDOWN
         )
     except Exception as e:
-        logger.error(f"Failed to send download started message: {str(e)}")
+        logger.error(f"Failed to edit download started message: {str(e)}")
         download_message = await bot.send_message(
             chat_id=query.message.chat.id,
             text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
@@ -201,8 +201,8 @@ async def yt_callback_handler(bot, query):
     # Initialize the YTDLProgress class
     progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
 
-    # Send initial progress message after a short delay to ensure "Download started" is visible
-    await asyncio.sleep(1)
+    # Send initial progress message after a delay to ensure "Download started" is visible
+    await asyncio.sleep(2)
     initial_progress_text = f"**🎞 {title}**\n**📹 {resolution}**\n📥 **Downloading:** Initializing..."
     asyncio.create_task(progress.update_msg(initial_progress_text))
 
@@ -226,11 +226,13 @@ async def yt_callback_handler(bot, query):
         'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
     }
 
-    loop = asyncio.get_event_loop()
+    def download_video():
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=True)
+
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = loop.run_in_executor(executor, lambda: youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=True))
-            info_dict = await future
+            info_dict = await asyncio.get_running_loop().run_in_executor(executor, download_video)
         downloaded_path = youtube_dl.YoutubeDL(ydl_opts).prepare_filename(info_dict)
         if not os.path.exists(downloaded_path):
             raise Exception("Downloaded file not found")
@@ -243,8 +245,8 @@ async def yt_callback_handler(bot, query):
     await progress.cleanup()
     try:
         await download_message.delete()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.error(f"Failed to delete download message: {str(e)}")
 
     try:
         final_filesize = os.path.getsize(downloaded_path)
@@ -254,7 +256,11 @@ async def yt_callback_handler(bot, query):
         filesize = humanbytes(final_filesize)
     except Exception as e:
         logger.error(f"Video processing error: {str(e)}")
-        await query.message.edit_text(f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await bot.send_message(
+            chat_id=query.message.chat.id,
+            text=f"❌ **Error processing video:** {str(e)}",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
         return
 
     thumb_url = info_dict.get('thumbnail', None)
