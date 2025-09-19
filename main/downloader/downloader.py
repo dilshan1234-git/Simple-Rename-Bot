@@ -1,6 +1,5 @@
 import os
 import time
-import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -204,7 +203,7 @@ async def yt_callback_handler(bot, query):
     # Send initial progress message after a delay to ensure "Download started" is visible
     await asyncio.sleep(2)
     initial_progress_text = f"**🎞 {title}**\n**📹 {resolution}**\n📥 **Downloading:** Initializing..."
-    asyncio.create_task(progress.update_msg(initial_progress_text))
+    await progress.update_msg(initial_progress_text)  # Await the initial message
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -227,12 +226,16 @@ async def yt_callback_handler(bot, query):
     }
 
     def download_video():
-        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(url, download=True)
+        try:
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                info_dict = ydl.extract_info(url, download=True)
+            return info_dict
+        except Exception as e:
+            raise e
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            info_dict = await asyncio.get_running_loop().run_in_executor(executor, download_video)
+            info_dict = await asyncio.get_event_loop().run_in_executor(executor, download_video)
         downloaded_path = youtube_dl.YoutubeDL(ydl_opts).prepare_filename(info_dict)
         if not os.path.exists(downloaded_path):
             raise Exception("Downloaded file not found")
