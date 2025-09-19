@@ -1,84 +1,75 @@
 # main/downloader/progress_hook.py
 
-import asyncio
-import logging
-from queue import Queue
+import os
+import math
+import time
+from pyrogram.enums import ParseMode
+from main.utils import progress_message, humanbytes
 
-logger = logging.getLogger(__name__)
+# Dictionary to track last update time for each message
+last_update_time = {}
 
-class YTDLProgress:
-    def __init__(self, bot, chat_id, prefix_text="Downloading: "):
-        """
-        :param bot: Pyrogram Client (for sending edits)
-        :param chat_id: Chat where progress will be sent
-        :param prefix_text: Prefix shown in progress messages
-        """
-        self.bot = bot
-        self.chat_id = chat_id
-        self.prefix_text = prefix_text
-        self.progress_queue = Queue()
-        self.active = True
-        self.task = None
-
-        # Message object to update later
-        self.msg = None
-
-    async def bind(self, msg):
-        """Bind to a Telegram message to edit progress"""
-        self.msg = msg
-
-    async def start(self):
-        """Start processing the queue asynchronously"""
-        self.task = asyncio.create_task(self.process_queue())
-
-    async def stop(self):
-        """Stop queue processing and cleanup"""
-        self.active = False
-        if self.task:
-            await self.task
-        await self.cleanup()
-
-    async def process_queue(self):
-        """Process the queue and update message in Telegram"""
-        while self.active:
-            if not self.progress_queue.empty() and self.msg:
-                text = self.progress_queue.get()
-                try:
-                    await self.msg.edit_text(text)
-                except Exception as e:
-                    logger.error(f"Error updating message: {e}")
-            await asyncio.sleep(2)  # smoother updates
-
-    async def cleanup(self):
-        """Flush remaining messages before shutdown"""
-        while not self.progress_queue.empty() and self.msg:
-            text = self.progress_queue.get()
-            try:
-                await self.msg.edit_text(text)
-            except Exception as e:
-                logger.error(f"Error in cleanup: {e}")
-
-    def hook(self, d):
-        """yt_dlp progress hook"""
+async def progress_hook(d, message, start_time):
+    """
+    Hook for yt_dlp progress reporting.
+    Updates the Telegram message with download progress.
+    """
+    try:
         if d["status"] == "downloading":
+            now = time.time()
+            # Avoid too frequent updates (every 3 seconds)
+            if (message.id not in last_update_time) or (now - last_update_time[message.id] > 3):
+                last_update_time[message.id] = now
+
+                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
+                downloaded_bytes = d.get("downloaded_bytes", 0)
+                speed = d.get("speed", 0)
+                eta = d.get("eta", 0)
+
+                percent = 0
+                if total_bytes and total_bytes > 0:
+                    percent = downloaded_bytes * 100 / total_bytes
+
+                text = f"""
+<b>📥 Downloading...</b>
+
+<b>File:</b> {d.get('filename', 'Unknown')}
+<b>Progress:</b> {percent:.2f}%
+<b>Downloaded:</b> {humanbytes(downloaded_bytes)} / {humanbytes(total_bytes) if total_bytes else "?"}
+<b>Speed:</b> {humanbytes(speed)}/s
+<b>ETA:</b> {time.strftime('%H:%M:%S', time.gmtime(eta))}
+"""
+
+                try:
+                    await message.edit_text(
+                        text,
+                        parse_mode=ParseMode.HTML,
+                        disable_web_page_preview=True
+                    )
+                except Exception:
+                    pass
+
+        elif d["status"] == "finished":
+            text = f"""
+<b>✅ Download Completed!</b>
+
+<b>File:</b> {d.get('filename', 'Unknown')}
+<b>Total Size:</b> {humanbytes(d.get("total_bytes", 0))}
+"""
             try:
-                percent = d.get("_percent_str", "").strip()
-                speed = d.get("_speed_str", "").strip()
-                eta = d.get("_eta_str", "").strip()
-
-                text = (
-                    f"{self.prefix_text}\n"
-                    f"📥 Progress: {percent}\n"
-                    f"⚡ Speed: {speed}\n"
-                    f"⏳ ETA: {eta}"
+                await message.edit_text(
+                    text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True
                 )
+            except Exception:
+                pass
 
-                # ✅ Queue update for Telegram
-                self.progress_queue.put(text)
-
-                # ✅ Also log to Colab in real time
-                logger.info(f"[YTDL] {text.replace(self.prefix_text, '').strip()[:80]}...")
-                print(f"[YTDL] {text.replace(self.prefix_text, '').strip()[:80]}...", flush=True)
-
-            except Exception as e:
-                logger.error(f"Error in hook: {e}")
+    except Exception as e:
+        try:
+            await message.edit_text(
+                f"❌ Error in progress hook: <code>{e}</code>",
+                parse_mode=ParseMode.HTML
+            )
+        except Exception:
+            pass
