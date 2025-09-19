@@ -230,20 +230,31 @@ async def yt_callback_handler(bot, query):
         try:
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info_dict = ydl.extract_info(url, download=True)
-                return info_dict, ydl.prepare_filename(info_dict)
+                downloaded_path = ydl.prepare_filename(info_dict)
+                return info_dict, downloaded_path
         except Exception as e:
             raise e
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(download_video)
-            info_dict, downloaded_path = future.result()
+            info_dict, downloaded_path = executor.submit(download_video).result()
         if not os.path.exists(downloaded_path):
             raise Exception("Downloaded file not found")
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
         await progress.cleanup()
-        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        try:
+            await download_message.edit_text(
+                f"❌ **Error during download:** {str(e)}",
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Failed to edit error message: {str(e)}")
+            await bot.send_message(
+                chat_id=query.message.chat.id,
+                text=f"❌ **Error during download:** {str(e)}",
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
         return
 
     await progress.cleanup()
