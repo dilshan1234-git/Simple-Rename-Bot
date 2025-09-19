@@ -6,9 +6,14 @@ from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
 from PIL import Image
+import logging
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
+
+# Set up logging to debug button issues
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -25,9 +30,10 @@ async def ytdl(bot, msg):
     )
 
 # Command to handle YouTube video link and provide resolution/audio options
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?youtube\.com/(watch\?v=|shorts/)'))
+@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
+    logger.info(f"Processing YouTube URL: {url}")
 
     # Send processing message
     processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
@@ -37,18 +43,24 @@ async def youtube_link_handler(bot, msg):
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
+        'format_sort': ['+res', '+size'],  # Sort formats by resolution and size
     }
 
-    with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-        info_dict = ydl.extract_info(url, download=False)
-        title = info_dict.get('title', 'Unknown Title')
-        views = info_dict.get('view_count', 'N/A')
-        likes = info_dict.get('like_count', 'N/A')
-        thumb_url = info_dict.get('thumbnail', None)
-        description = info_dict.get('description', 'No description available.')
-        formats = info_dict.get('formats', [])      
-        duration_seconds = info_dict.get('duration', 0)
-        uploader = info_dict.get('uploader', 'Unknown Channel')
+    try:
+        with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+            info_dict = ydl.extract_info(url, download=False)
+            title = info_dict.get('title', 'Unknown Title')
+            views = info_dict.get('view_count', 'N/A')
+            likes = info_dict.get('like_count', 'N/A')
+            thumb_url = info_dict.get('thumbnail', None)
+            description = info_dict.get('description', 'No description available.')
+            formats = info_dict.get('formats', [])      
+            duration_seconds = info_dict.get('duration', 0)
+            uploader = info_dict.get('uploader', 'Unknown Channel')
+    except Exception as e:
+        logger.error(f"Failed to extract video info: {str(e)}")
+        await processing_message.edit_text(f"❌ **Error extracting video info:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        return
 
     # Format the duration as HH:MM:SS
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
@@ -57,23 +69,27 @@ async def youtube_link_handler(bot, msg):
     available_resolutions = []
     available_audio = []
 
+    logger.info(f"Found {len(formats)} formats for video")
     for f in formats:
         if f['ext'] == 'mp4' and f.get('vcodec') != 'none':  # Check for video formats
-            resolution = f"{f['height']}p"
-            fps = f.get('fps', None)  # Get the fps (frames per second)
-            if fps in [50, 60]:  # Append fps to the resolution if it's 50 or 60
+            resolution = f"{f.get('height', 'Unknown')}p"
+            fps = f.get('fps', None)
+            if fps in [50, 60]:
                 resolution += f"{fps}fps"
-            filesize = f.get('filesize')  # Fetch the filesize
-            if filesize:  # Only process if filesize is not None
-                filesize_str = humanbytes(filesize)  # Convert size to human-readable format
-                format_id = f['format_id']
+            filesize = f.get('filesize') or f.get('filesize_approx')
+            format_id = f.get('format_id')
+            if format_id:  # Ensure format_id exists
+                filesize_str = humanbytes(filesize) if filesize else 'Unknown'
                 available_resolutions.append((resolution, filesize_str, format_id))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':  # Check for audio formats
-            filesize = f.get('filesize')
-            if filesize:
-                filesize_str = humanbytes(filesize)  # Show file size instead of bitrate
-                format_id = f['format_id']
-                available_audio.append((filesize, filesize_str, format_id))
+            filesize = f.get('filesize') or f.get('filesize_approx')
+            format_id = f.get('format_id')
+            if format_id:
+                filesize_str = humanbytes(filesize) if filesize else 'Unknown'
+                available_audio.append((filesize or 0, filesize_str, format_id))
+
+    logger.info(f"Available resolutions: {available_resolutions}")
+    logger.info(f"Available audio formats: {available_audio}")
 
     buttons = []
     row = []
@@ -83,24 +99,29 @@ async def youtube_link_handler(bot, msg):
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
         row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
-        if len(row) == 2:  # Adjust the number of buttons per row if needed
+        if len(row) == 2:
             buttons.append(row)
             row = []
 
     if row:
         buttons.append(row)
 
-    # Find the highest quality audio based on the largest file size (in bytes)
+    # Find the highest quality audio based on the largest file size
     if available_audio:
-        highest_quality_audio = max(available_audio, key=lambda x: float(x[1].replace(' MB', '').replace(' KB', '').strip()) * (1000000 if 'MB' in x[1] else 1000))
-        _, size, format_id = highest_quality_audio  # Extract the size and format_id
+        highest_quality_audio = max(available_audio, key=lambda x: x[0])
+        _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
     
-    # Add description and thumbnail buttons in the same row
+    # Add description and thumbnail buttons
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
+
+    if not buttons:
+        logger.error("No buttons generated; sending error message")
+        await processing_message.edit_text("❌ **No valid formats found for this video.**", parse_mode=enums.ParseMode.MARKDOWN)
+        return
 
     markup = InlineKeyboardMarkup(buttons)
 
@@ -113,19 +134,48 @@ async def youtube_link_handler(bot, msg):
         f"📥 **Select your resolution or audio format:**"
     )
 
-    thumb_response = requests.get(thumb_url)
-    thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-    with open(thumb_path, 'wb') as thumb_file:
-        thumb_file.write(thumb_response.content)
-    await bot.send_photo(chat_id=msg.chat.id, photo=thumb_path, caption=caption, parse_mode=enums.ParseMode.MARKDOWN)
-    os.remove(thumb_path)
+    try:
+        if thumb_url:
+            thumb_response = requests.get(thumb_url)
+            if thumb_response.status_code == 200:
+                thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
+                with open(thumb_path, 'wb') as thumb_file:
+                    thumb_file.write(thumb_response.content)
+                await bot.send_photo(
+                    chat_id=msg.chat.id,
+                    photo=thumb_path,
+                    caption=caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+                os.remove(thumb_path)
+            else:
+                logger.error(f"Failed to download thumbnail: HTTP {thumb_response.status_code}")
+                await bot.send_message(
+                    chat_id=msg.chat.id,
+                    text=caption,
+                    reply_markup=markup,
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+        else:
+            logger.warning("No thumbnail URL available; sending caption with buttons")
+            await bot.send_message(
+                chat_id=msg.chat.id,
+                text=caption,
+                reply_markup=markup,
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+    except Exception as e:
+        logger.error(f"Failed to send message with buttons: {str(e)}")
+        await processing_message.edit_text(f"❌ **Error sending video options:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        return
 
     await msg.delete()
     await processing_message.delete()
 
-@Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?youtube\.com/watch\?v='))
+@Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p(?:\d+fps)?_https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def yt_callback_handler(bot, query):
-    from main.downloader.progress_hook import YTDLProgress  # Import the YTDLProgress class
+    from main.downloader.progress_hook import YTDLProgress
 
     data = query.data.split('_')
     format_id = data[1]
@@ -148,21 +198,21 @@ async def yt_callback_handler(bot, query):
     progress = YTDLProgress(bot, download_message, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
 
     ydl_opts = {
-        'format': f"{format_id}+bestaudio[ext=m4a]/best",  # Fallback to 'best' if format fails
+        'format': f"{format_id}+bestaudio[ext=m4a]/best",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4'
         }],
-        'progress_hooks': [progress.hook],  # Add the progress hook
-        'noplaylist': True,  # Ensure no playlist processing
-        'quiet': True,  # Suppress verbose output
-        'no_warnings': True,  # Suppress warnings
-        'noprogress': True,  # Disable console progress output
-        'retries': 10,  # Retry on transient errors
-        'fragment_retries': 10,  # Retry on fragment download failures
-        'skip_unavailable_fragments': True  # Skip unavailable fragments
+        'progress_hooks': [progress.hook],
+        'noplaylist': True,
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'retries': 10,
+        'fragment_retries': 10,
+        'skip_unavailable_fragments': True
     }
 
     try:
@@ -173,6 +223,7 @@ async def yt_callback_handler(bot, query):
                 raise Exception("Downloaded file not found")
         
     except Exception as e:
+        logger.error(f"Download error: {str(e)}")
         await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
@@ -183,6 +234,7 @@ async def yt_callback_handler(bot, query):
         video_width, video_height = video.size
         filesize = humanbytes(final_filesize)
     except Exception as e:
+        logger.error(f"Video processing error: {str(e)}")
         await download_message.edit_text(f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
@@ -212,10 +264,9 @@ async def yt_callback_handler(bot, query):
 
     caption = (
         f"**🎞 {info_dict['title']}   |   [🔗 URL]({url})**\n\n"
-        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"                     
+        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"
     )
 
-    # Delete the "Download started" message and update the caption to "Uploading started"
     await download_message.delete()
 
     uploading_message = await bot.send_photo(
@@ -241,18 +292,18 @@ async def yt_callback_handler(bot, query):
             progress_args=(f"**📤 Uploading Started...Thanks To All Who Supported ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
         )
     except Exception as e:
+        logger.error(f"Upload error: {str(e)}")
         await uploading_message.edit_text(f"❌ **Error during upload:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     await uploading_message.delete()
 
-    # Clean up the downloaded video file and thumbnail after sending
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
 
-@Client.on_callback_query(filters.regex(r'^thumb_https?://(www\.)?youtube\.com/watch\?v='))
+@Client.on_callback_query(filters.regex(r'^thumb_https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def thumb_callback_handler(bot, query):
     url = '_'.join(query.data.split('_')[1:])
     ydl_opts = {'quiet': True, 'no_warnings': True}
@@ -273,19 +324,18 @@ async def thumb_callback_handler(bot, query):
         await bot.send_photo(chat_id=query.message.chat.id, photo=thumb_path, parse_mode=enums.ParseMode.MARKDOWN)
         os.remove(thumb_path)
     else:
+        logger.error(f"Thumbnail download failed: HTTP {thumb_response.status_code}")
         await query.message.edit_text("❌ **Failed to download thumbnail.**", parse_mode=enums.ParseMode.MARKDOWN)
 
-@Client.on_callback_query(filters.regex(r'^desc_https?://(www\.)?youtube\.com/watch\?v='))
+@Client.on_callback_query(filters.regex(r'^desc_https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def description_callback_handler(bot, query):
     url = '_'.join(query.data.split('_')[1:])
 
-    # Extract video information to get the description
     ydl_opts = {'quiet': True, 'no_warnings': True}
     with youtube_dl.YoutubeDL(ydl_opts) as ydl:
         info_dict = ydl.extract_info(url, download=False)
         description = info_dict.get('description', 'No description available.')
 
-    # Truncate the description to 4096 characters, the max limit for a text message
     if len(description) > 4096:
         description = description[:4093] + "..."
 
