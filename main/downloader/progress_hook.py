@@ -90,11 +90,11 @@ class YTDLProgress:
                 text = f"{self.prefix_text}\n📥 Downloading: {d.get('filename', 'Video')}\n" \
                        f"Downloaded: {humanbytes(downloaded_bytes) if downloaded_bytes and isinstance(downloaded_bytes, (int, float)) else 'N/A'}"
 
-            asyncio.create_task(self.update_msg(text))
+            asyncio.run_coroutine_threadsafe(self.update_msg(text), self.loop)
 
         elif status == 'finished':
             text = f"{self.prefix_text}\n✅ Download finished: {d.get('filename', 'Video')}\n🔄 Merging/processing..."
-            asyncio.create_task(self.update_msg(text))
+            asyncio.run_coroutine_threadsafe(self.update_msg(text), self.loop)
 
     async def cleanup(self):
         """Clean up the progress message after download completes."""
