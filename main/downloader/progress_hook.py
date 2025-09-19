@@ -7,16 +7,25 @@ from queue import Queue
 logger = logging.getLogger(__name__)
 
 class YTDLProgress:
-    def __init__(self, update_msg, prefix_text="Downloading: "):
+    def __init__(self, bot, chat_id, prefix_text="Downloading: "):
         """
-        :param update_msg: async function to update Telegram message
-        :param prefix_text: prefix shown in progress messages
+        :param bot: Pyrogram Client (for sending edits)
+        :param chat_id: Chat where progress will be sent
+        :param prefix_text: Prefix shown in progress messages
         """
-        self.update_msg = update_msg
+        self.bot = bot
+        self.chat_id = chat_id
         self.prefix_text = prefix_text
         self.progress_queue = Queue()
         self.active = True
         self.task = None
+
+        # Message object to update later
+        self.msg = None
+
+    async def bind(self, msg):
+        """Bind to a Telegram message to edit progress"""
+        self.msg = msg
 
     async def start(self):
         """Start processing the queue asynchronously"""
@@ -32,20 +41,20 @@ class YTDLProgress:
     async def process_queue(self):
         """Process the queue and update message in Telegram"""
         while self.active:
-            if not self.progress_queue.empty():
+            if not self.progress_queue.empty() and self.msg:
                 text = self.progress_queue.get()
                 try:
-                    await self.update_msg(text)
+                    await self.msg.edit_text(text)
                 except Exception as e:
                     logger.error(f"Error updating message: {e}")
-            await asyncio.sleep(2)  # ✅ faster updates (was 4)
+            await asyncio.sleep(2)  # smoother updates
 
     async def cleanup(self):
         """Flush remaining messages before shutdown"""
-        while not self.progress_queue.empty():
+        while not self.progress_queue.empty() and self.msg:
             text = self.progress_queue.get()
             try:
-                await self.update_msg(text)
+                await self.msg.edit_text(text)
             except Exception as e:
                 logger.error(f"Error in cleanup: {e}")
 
