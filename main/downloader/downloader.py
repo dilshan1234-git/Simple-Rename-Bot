@@ -1,29 +1,26 @@
 import os
 import time
-import requests
 import asyncio
+import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
 from PIL import Image
 import logging
-from concurrent.futures import ThreadPoolExecutor  # Added for non-blocking download
+from concurrent.futures import ThreadPoolExecutor
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 
-# Set up logging to debug button issues
+# Set up logging to debug issues
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Command to display welcome text with the YouTube link handler
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
-    # Replace the placeholder with the actual URL from config.py
     caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
-    
-    # Send the image with the updated caption
     await bot.send_photo(
         chat_id=msg.chat.id,
         photo=TELEGRAPH_IMAGE_URL,
@@ -37,7 +34,6 @@ async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
     logger.info(f"Processing YouTube URL: {url}")
 
-    # Send processing message
     processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
 
     ydl_opts = {
@@ -46,6 +42,10 @@ async def youtube_link_handler(bot, msg):
         'quiet': True,
         'no_warnings': True,
         'format_sort': ['+res', '+size'],
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
+        'retries': 10,
+        'fragment_retries': 10,
     }
 
     try:
@@ -64,10 +64,8 @@ async def youtube_link_handler(bot, msg):
         await processing_message.edit_text(f"❌ **Error extracting video info:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Format the duration as HH:MM:SS
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
 
-    # Extract all available resolutions with their sizes
     available_resolutions = []
     available_audio = []
 
@@ -96,7 +94,6 @@ async def youtube_link_handler(bot, msg):
     buttons = []
     row = []
     
-    # Add available resolutions to the buttons
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
@@ -108,13 +105,11 @@ async def youtube_link_handler(bot, msg):
     if row:
         buttons.append(row)
 
-    # Find the highest quality audio based on the largest file size
     if available_audio:
         highest_quality_audio = max(available_audio, key=lambda x: x[0])
         _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
     
-    # Add description and thumbnail buttons
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -184,21 +179,32 @@ async def yt_callback_handler(bot, query):
     resolution = data[2]
     url = query.data.split('_', 3)[3]
 
-    # Get the title from the original message caption
     try:
         title = query.message.caption.split('🎞 ')[1].split('\n')[0]
     except IndexError:
         title = "Unknown Title"
 
-    # Send the "Download started" message as a new text message
-    download_message = await bot.send_message(
-        chat_id=query.message.chat.id,
-        text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
+    # Send the "Download started" message by editing the query message
+    try:
+        download_message = await query.message.edit_text(
+            f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+    except Exception as e:
+        logger.error(f"Failed to send download started message: {str(e)}")
+        download_message = await bot.send_message(
+            chat_id=query.message.chat.id,
+            text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
 
-    # Initialize the YTDLProgress class with the download_message
-    progress = YTDLProgress(bot, download_message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")  # Note: Using chat_id, but the class will send/edit its own message
+    # Initialize the YTDLProgress class
+    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
+
+    # Send initial progress message after a short delay to ensure "Download started" is visible
+    await asyncio.sleep(1)
+    initial_progress_text = f"**🎞 {title}**\n**📹 {resolution}**\n📥 **Downloading:** Initializing..."
+    asyncio.create_task(progress.update_msg(initial_progress_text))
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -215,11 +221,12 @@ async def yt_callback_handler(bot, query):
         'noprogress': True,
         'retries': 10,
         'fragment_retries': 10,
-        'skip_unavailable_fragments': True
+        'skip_unavailable_fragments': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
     }
 
     loop = asyncio.get_event_loop()
-
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
             future = loop.run_in_executor(executor, lambda: youtube_dl.YoutubeDL(ydl_opts).extract_info(url, download=True))
@@ -233,10 +240,7 @@ async def yt_callback_handler(bot, query):
         await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Clean up the progress message after download
     await progress.cleanup()
-
-    # Delete the "Download started" message if not already deleted by cleanup
     try:
         await download_message.delete()
     except Exception:
@@ -260,7 +264,6 @@ async def yt_callback_handler(bot, query):
         if response.status_code == 200:
             with open(thumb_path, 'wb') as thumb_file:
                 thumb_file.write(response.content)
-
             with Image.open(thumb_path) as img:
                 img_width, img_height = img.size
                 scale_factor = max(video_width / img_width, video_height / img_height)
