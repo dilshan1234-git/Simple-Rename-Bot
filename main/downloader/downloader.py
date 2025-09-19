@@ -6,8 +6,6 @@ import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
-from PIL import Image
-import logging
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
@@ -15,10 +13,6 @@ from main.downloader.progress_hook import YTDLProgress
 import nest_asyncio
 
 nest_asyncio.apply()
-
-# Logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # /ytdl command
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -35,8 +29,6 @@ async def ytdl(bot, msg):
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
-    logger.info(f"Processing YouTube URL: {url}")
-
     processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
 
     ydl_opts = {
@@ -44,8 +36,7 @@ async def youtube_link_handler(bot, msg):
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
-        'format_sort': ['+res', '+size'],
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        'user_agent': 'Mozilla/5.0',
         'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
         'retries': 10,
         'fragment_retries': 10,
@@ -54,72 +45,70 @@ async def youtube_link_handler(bot, msg):
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=False)
-            title = info_dict.get('title', 'Unknown Title')
-            views = info_dict.get('view_count', 'N/A')
-            likes = info_dict.get('like_count', 'N/A')
-            thumb_url = info_dict.get('thumbnail', None)
-            duration_seconds = info_dict.get('duration', 0)
-            uploader = info_dict.get('uploader', 'Unknown Channel')
-            formats = info_dict.get('formats', [])
     except Exception as e:
         await processing_message.edit_text(f"❌ **Error extracting video info:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    title = info_dict.get('title', 'Unknown Title')
+    views = info_dict.get('view_count', 'N/A')
+    likes = info_dict.get('like_count', 'N/A')
+    thumb_url = info_dict.get('thumbnail', None)
+    duration_seconds = info_dict.get('duration', 0)
+    uploader = info_dict.get('uploader', 'Unknown Channel')
+    formats = info_dict.get('formats', [])
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
 
-    # Collect resolutions and audio
-    available_resolutions = {}
+    # Extract resolutions & audio
+    available_resolutions = []
     available_audio = []
+
     for f in formats:
         if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
-            height = int(f.get('height', 0))
-            fps = int(f.get('fps', 0)) if f.get('fps') else None
+            height = f.get('height')
+            fps = f.get('fps', None)
             resolution = f"{height}p"
-            # Add FPS only for 720p/1080p and if 50/60fps
-            if height in [720, 1080] and fps in [50, 60]:
-                resolution_fps = f"{height}p{fps}fps"
-                available_resolutions[resolution_fps] = (f.get('format_id'), f.get('filesize') or f.get('filesize_approx'))
-            # Normal resolution
-            available_resolutions[resolution] = (f.get('format_id'), f.get('filesize') or f.get('filesize_approx'))
+            if fps in [50, 60] and height in [720, 1080]:
+                resolution += f"{fps}fps"
+            filesize = f.get('filesize') or f.get('filesize_approx')
+            if filesize:
+                size_str = humanbytes(filesize)
+                available_resolutions.append((resolution, size_str, f['format_id']))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
-            format_id = f.get('format_id')
-            if format_id:
-                filesize_str = humanbytes(filesize) if filesize else 'Unknown'
-                available_audio.append((filesize or 0, filesize_str, format_id))
+            if filesize:
+                size_str = humanbytes(filesize)
+                available_audio.append((filesize, size_str, f['format_id']))
 
     # Sort resolutions numerically
-    def res_sort_key(res_name):
+    def res_sort_key(item):
+        res_name = item[0]
         digits = ''.join(filter(str.isdigit, res_name))
         return int(digits) if digits else 0
+    available_resolutions.sort(key=res_sort_key)
 
-    sorted_resolutions = sorted(available_resolutions.items(), key=lambda x: res_sort_key(x[0]))
-
-    # Build 2-column buttons
+    # Build buttons
     buttons = []
     row = []
-    for res_name, (format_id, filesize) in sorted_resolutions:
-        size_str = humanbytes(filesize) if filesize else 'Unknown'
-        row.append(InlineKeyboardButton(f"📹 {res_name} - {size_str}", callback_data=f"yt_{format_id}_{res_name}_{url}"))
+    for resolution, size, format_id in available_resolutions:
+        row.append(InlineKeyboardButton(f"📹 {resolution} - {size}", callback_data=f"yt_{format_id}_{resolution}_{url}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
-    # Audio button
     if available_audio:
-        highest_quality_audio = max(available_audio, key=lambda x: x[0])
-        _, size, format_id = highest_quality_audio
+        highest_audio = max(available_audio, key=lambda x: x[0])
+        _, size, format_id = highest_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
-    # Thumbnail & Description
+    # Description & thumbnail
     buttons.append([
-        InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}"),
-        InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}")
+        InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
+        InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
     ])
-
     markup = InlineKeyboardMarkup(buttons)
+
     caption = (
         f"**🎞 {title}**\n\n"
         f"**👀 Views:** {views}\n"
@@ -129,35 +118,25 @@ async def youtube_link_handler(bot, msg):
         f"📥 **Select your resolution or audio format:**"
     )
 
-    try:
-        if thumb_url:
-            resp = requests.get(thumb_url)
-            if resp.status_code == 200:
-                thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-                with open(thumb_path, 'wb') as f:
-                    f.write(resp.content)
-                download_message = await bot.send_photo(
-                    chat_id=msg.chat.id,
-                    photo=thumb_path,
-                    caption=caption,
-                    reply_markup=markup,
-                    parse_mode=enums.ParseMode.MARKDOWN
-                )
-                os.remove(thumb_path)
-            else:
-                download_message = await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
+    if thumb_url:
+        resp = requests.get(thumb_url)
+        if resp.status_code == 200:
+            thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
+            with open(thumb_path, 'wb') as f:
+                f.write(resp.content)
+            download_message = await bot.send_photo(msg.chat.id, photo=thumb_path, caption=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
+            os.remove(thumb_path)
         else:
             download_message = await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
-    except Exception as e:
-        await processing_message.edit_text(f"❌ **Error sending video options:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
-        return
+    else:
+        download_message = await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
 
     await msg.delete()
     await processing_message.delete()
 
 
-# Handle resolution/audio selection
-@Client.on_callback_query(filters.regex(r'^yt_\d+_'))
+# Callback handler for video/audio download
+@Client.on_callback_query(filters.regex(r'^(yt|audio)_'))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
     format_id = data[1]
@@ -166,13 +145,12 @@ async def yt_callback_handler(bot, query):
 
     try:
         title = query.message.caption.split('🎞 ')[1].split('\n')[0]
-    except Exception:
+    except:
         title = "Unknown Title"
 
-    # Live download progress using YTDLProgress
+    # Initialize live progress
     progress = YTDLProgress(bot, query.message.chat.id)
     progress.update_task = asyncio.create_task(progress.process_queue())
-
     await progress.update_msg(f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
 
     ydl_opts = {
@@ -200,88 +178,42 @@ async def yt_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Auto-delete initial download message
     await progress.cleanup()
     await query.message.delete()
 
-    # Process video for upload
+    # Upload video
     try:
-        final_filesize = os.path.getsize(downloaded_path)
+        final_size = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
         duration = int(video.duration)
-        video_width, video_height = video.size
-        filesize = humanbytes(final_filesize)
+        filesize = humanbytes(final_size)
     except Exception as e:
         await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    thumb_path = None
     thumb_url = info_dict.get('thumbnail', None)
-    thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
     if thumb_url:
         resp = requests.get(thumb_url)
         if resp.status_code == 200:
+            thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
             with open(thumb_path, 'wb') as f:
                 f.write(resp.content)
-        else:
-            thumb_path = None
-    else:
-        thumb_path = None
 
-    caption = (
-        f"**🎞 {info_dict['title']}   |   [🔗 URL]({url})**\n\n"
-        f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"
-    )
+    caption = f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**"
+    uploading_msg = await bot.send_message(query.message.chat.id, "🚀 **Uploading started...** 📤", parse_mode=enums.ParseMode.MARKDOWN)
 
-    uploading_message = await bot.send_message(
-        query.message.chat.id,
-        text="🚀 **Uploading started...** 📤",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
-
-    c_time = time.time()
     try:
-        await bot.send_video(
-            chat_id=query.message.chat.id,
-            video=downloaded_path,
-            thumb=thumb_path,
-            caption=caption,
-            duration=duration,
-            progress=progress_message,
-            progress_args=(f"**📤 Uploading Started... ❤\n\n🎞 {info_dict['title']}**", uploading_message, c_time)
-        )
+        await bot.send_video(query.message.chat.id, video=downloaded_path, thumb=thumb_path, caption=caption, duration=duration,
+                             progress=progress_message, progress_args=(f"**📤 Uploading Started... ❤\n\n🎞 {info_dict['title']}**", uploading_msg, time.time()))
     except Exception as e:
-        await uploading_message.edit_text(f"❌ **Error during upload:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await uploading_msg.edit_text(f"❌ **Error during upload:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    await uploading_message.delete()
-
-    if os.path.exists(downloaded_path):
-        os.remove(downloaded_path)
+    await uploading_msg.delete()
+    os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
-
-
-# Thumbnail handler
-@Client.on_callback_query(filters.regex(r'^thumb_https?://'))
-async def thumb_callback_handler(bot, query):
-    url = '_'.join(query.data.split('_')[1:])
-    with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
-        info = ydl.extract_info(url, download=False)
-        thumb_url = info.get('thumbnail', None)
-
-    if not thumb_url:
-        await query.message.edit_text("❌ **No thumbnail found.**", parse_mode=enums.ParseMode.MARKDOWN)
-        return
-
-    resp = requests.get(thumb_url)
-    if resp.status_code == 200:
-        thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
-        with open(thumb_path, 'wb') as f:
-            f.write(resp.content)
-        await bot.send_photo(query.message.chat.id, photo=thumb_path)
-        os.remove(thumb_path)
-    else:
-        await query.message.edit_text("❌ **Failed to download thumbnail.**", parse_mode=enums.ParseMode.MARKDOWN)
 
 
 # Description handler
@@ -291,7 +223,27 @@ async def description_callback_handler(bot, query):
     with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
         info = ydl.extract_info(url, download=False)
         desc = info.get('description', 'No description available.')
-
     if len(desc) > 4096:
         desc = desc[:4093] + "..."
     await bot.send_message(query.message.chat.id, f"**📝 Description:**\n\n{desc}", parse_mode=enums.ParseMode.MARKDOWN)
+
+
+# Thumbnail handler
+@Client.on_callback_query(filters.regex(r'^thumb_https?://'))
+async def thumb_callback_handler(bot, query):
+    url = '_'.join(query.data.split('_')[1:])
+    with youtube_dl.YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(url, download=False)
+        thumb_url = info.get('thumbnail', None)
+    if not thumb_url:
+        await query.message.edit_text("❌ **No thumbnail found.**", parse_mode=enums.ParseMode.MARKDOWN)
+        return
+    resp = requests.get(thumb_url)
+    if resp.status_code == 200:
+        thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
+        with open(thumb_path, 'wb') as f:
+            f.write(resp.content)
+        await bot.send_photo(query.message.chat.id, photo=thumb_path)
+        os.remove(thumb_path)
+    else:
+        await query.message.edit_text("❌ **Failed to download thumbnail.**", parse_mode=enums.ParseMode.MARKDOWN)
