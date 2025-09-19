@@ -168,4 +168,3 @@ class YTDLProgress:
         if h > 0:
             return f"{h:02d}:{m:02d}:{s:02d}"
         return f"{m:02d}:{s:02d}"
-```
