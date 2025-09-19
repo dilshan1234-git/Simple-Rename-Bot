@@ -1,6 +1,5 @@
 import os
 import time
-import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
@@ -230,14 +229,14 @@ async def yt_callback_handler(bot, query):
         try:
             with youtube_dl.YoutubeDL(ydl_opts) as ydl:
                 info_dict = ydl.extract_info(url, download=True)
-            return info_dict
+                return info_dict, ydl.prepare_filename(info_dict)
         except Exception as e:
             raise e
 
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            info_dict = await asyncio.get_event_loop().run_in_executor(executor, download_video)
-        downloaded_path = youtube_dl.YoutubeDL(ydl_opts).prepare_filename(info_dict)
+            future = executor.submit(download_video)
+            info_dict, downloaded_path = future.result()
         if not os.path.exists(downloaded_path):
             raise Exception("Downloaded file not found")
     except Exception as e:
