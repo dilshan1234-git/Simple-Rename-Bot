@@ -24,7 +24,7 @@ async def ytdl(bot, msg):
     # Send the image with the updated caption
     await bot.send_photo(
         chat_id=msg.chat.id,
-        photo=TELEGRAPH_IMAGE_URL,  # Using the URL from config.py
+        photo=TELEGRAPH_IMAGE_URL,
         caption=caption_text,
         parse_mode=enums.ParseMode.MARKDOWN
     )
@@ -39,11 +39,11 @@ async def youtube_link_handler(bot, msg):
     processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
 
     ydl_opts = {
-        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',  # Prefer AVC/AAC format
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/mp4',
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
-        'format_sort': ['+res', '+size'],  # Sort formats by resolution and size
+        'format_sort': ['+res', '+size'],
     }
 
     try:
@@ -71,17 +71,17 @@ async def youtube_link_handler(bot, msg):
 
     logger.info(f"Found {len(formats)} formats for video")
     for f in formats:
-        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':  # Check for video formats
+        if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
             resolution = f"{f.get('height', 'Unknown')}p"
             fps = f.get('fps', None)
             if fps in [50, 60]:
                 resolution += f"{fps}fps"
             filesize = f.get('filesize') or f.get('filesize_approx')
             format_id = f.get('format_id')
-            if format_id:  # Ensure format_id exists
+            if format_id:
                 filesize_str = humanbytes(filesize) if filesize else 'Unknown'
                 available_resolutions.append((resolution, filesize_str, format_id))
-        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':  # Check for audio formats
+        elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
             format_id = f.get('format_id')
             if format_id:
@@ -188,14 +188,8 @@ async def yt_callback_handler(bot, query):
     except IndexError:
         title = "Unknown Title"
 
-    # Send initial download started message with title and resolution
-    download_message = await query.message.edit_text(
-        f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
-
-    # Initialize the YTDLProgress class
-    progress = YTDLProgress(bot, download_message, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
+    # Initialize the YTDLProgress class with chat_id
+    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -221,11 +215,14 @@ async def yt_callback_handler(bot, query):
             downloaded_path = ydl.prepare_filename(info_dict)
             if not os.path.exists(downloaded_path):
                 raise Exception("Downloaded file not found")
-        
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
-        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await progress.cleanup()
+        await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
+
+    # Clean up the progress message after download
+    await progress.cleanup()
 
     try:
         final_filesize = os.path.getsize(downloaded_path)
@@ -235,7 +232,7 @@ async def yt_callback_handler(bot, query):
         filesize = humanbytes(final_filesize)
     except Exception as e:
         logger.error(f"Video processing error: {str(e)}")
-        await download_message.edit_text(f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await query.message.edit_text(f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
     thumb_url = info_dict.get('thumbnail', None)
@@ -266,8 +263,6 @@ async def yt_callback_handler(bot, query):
         f"**🎞 {info_dict['title']}   |   [🔗 URL]({url})**\n\n"
         f"🎥 **{resolution}**   |   🗂 **{filesize}**\n"
     )
-
-    await download_message.delete()
 
     uploading_message = await bot.send_photo(
         chat_id=query.message.chat.id,
