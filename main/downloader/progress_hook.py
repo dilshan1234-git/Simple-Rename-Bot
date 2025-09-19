@@ -65,30 +65,69 @@ class YTDLProgress:
                 if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 3):
                     last_update_time[self.chat_id] = now
                     
-                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
-                    downloaded = d.get("downloaded_bytes", 0)
-                    speed = d.get("speed", 0)
-                    eta = d.get("eta", 0)
-                    percent = (downloaded * 100 / total_bytes) if total_bytes else 0
+                    # Safely handle None values
+                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                    downloaded = d.get("downloaded_bytes") or 0
+                    speed = d.get("speed") or 0
+                    eta = d.get("eta") or 0
+                    
+                    # Convert to numbers safely
+                    try:
+                        total_bytes = float(total_bytes) if total_bytes else 0
+                        downloaded = float(downloaded) if downloaded else 0
+                        speed = float(speed) if speed else 0
+                        eta = float(eta) if eta else 0
+                    except (ValueError, TypeError):
+                        total_bytes = downloaded = speed = eta = 0
+                    
+                    # Calculate percentage safely
+                    if total_bytes > 0:
+                        percent = (downloaded * 100 / total_bytes)
+                    else:
+                        percent = 0
+                    
+                    # Format ETA safely
+                    if eta > 0 and eta < 86400:  # Less than 24 hours
+                        eta_str = time.strftime('%H:%M:%S', time.gmtime(int(eta)))
+                    else:
+                        eta_str = "Unknown"
+                    
+                    # Format speed safely
+                    speed_str = humanbytes(int(speed)) if speed > 0 else "0 B"
+                    
+                    # Format sizes safely
+                    downloaded_str = humanbytes(int(downloaded))
+                    total_str = humanbytes(int(total_bytes)) if total_bytes > 0 else "Unknown"
                     
                     text = (
-                        f"**Progress:** {percent:.2f}%\n"
-                        f"**Downloaded:** {humanbytes(downloaded)} / {humanbytes(total_bytes) if total_bytes else '?'}\n"
-                        f"**⚡️ Speed:** {humanbytes(speed)}/s\n"
-                        f"**⏰ ETA:** {time.strftime('%H:%M:%S', time.gmtime(eta))}"
+                        f"**Progress:** {percent:.1f}%\n"
+                        f"**Downloaded:** {downloaded_str} / {total_str}\n"
+                        f"**⚡️ Speed:** {speed_str}/s\n"
+                        f"**⏰ ETA:** {eta_str}"
                     )
                     self.enqueue(text)
                     
             elif d["status"] == "finished":
+                # Safely handle finished status
+                filename = d.get('filename', 'Unknown')
+                if filename and len(filename) > 50:
+                    filename = "..." + filename[-47:]  # Truncate long filenames
+                
+                total_bytes = d.get('total_bytes') or 0
+                try:
+                    total_bytes = float(total_bytes) if total_bytes else 0
+                except (ValueError, TypeError):
+                    total_bytes = 0
+                
                 text = (
                     f"✅ **Download Completed!**\n\n"
-                    f"**📂 File:** {d.get('filename', 'Unknown')}\n"
-                    f"**💾 Total Size:** {humanbytes(d.get('total_bytes', 0))}"
+                    f"**📂 File:** {filename}\n"
+                    f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
                 )
                 self.enqueue(text)
                 
         except Exception as e:
-            self.enqueue(f"❌ Error in progress hook: `{e}`")
+            self.enqueue(f"❌ Error in progress hook: `{str(e)}`")
 
     async def cleanup(self):
         """Cleanup background task"""
