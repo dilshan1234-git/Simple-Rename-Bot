@@ -12,6 +12,9 @@ from concurrent.futures import ThreadPoolExecutor
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
+import nest_asyncio
+
+nest_asyncio.apply()
 
 # Set up logging to debug issues
 logging.basicConfig(level=logging.INFO)
@@ -93,7 +96,7 @@ async def youtube_link_handler(bot, msg):
 
     buttons = []
     row = []
-    
+
     for resolution, size, format_id in available_resolutions:
         button_text = f"🎬 {resolution} - {size}"
         callback_data = f"yt_{format_id}_{resolution}_{url}"
@@ -235,28 +238,22 @@ async def yt_callback_handler(bot, query):
         except Exception as e:
             raise e
 
+    info_dict = None
+    downloaded_path = None
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
-            info_dict, downloaded_path = executor.submit(download_video).result()
+            future = executor.submit(download_video)
+            info_dict, downloaded_path = future.result()
         if not os.path.exists(downloaded_path):
             raise Exception("Downloaded file not found")
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
         await progress.cleanup()
-        try:
-            await download_message.edit_text(
-                f"❌ **Error during download:** {str(e)}",
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit error message: {str(e)}")
-            await bot.send_message(
-                chat_id=query.message.chat.id,
-                text=f"❌ **Error during download:** {str(e)}",
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
+        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    # Delay before cleanup to allow late hook calls
+    await asyncio.sleep(5)
     await progress.cleanup()
     try:
         await download_message.delete()
@@ -377,3 +374,4 @@ async def description_callback_handler(bot, query):
         description = description[:4093] + "..."
 
     await bot.send_message(chat_id=query.message.chat.id, text=f"**📝 Description:**\n\n{description}", parse_mode=enums.ParseMode.MARKDOWN)
+</xaiArtifact>
