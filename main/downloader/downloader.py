@@ -16,7 +16,7 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-# Set up logging with reduced verbosity
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -69,9 +69,9 @@ async def youtube_link_handler(bot, msg):
 
     duration = time.strftime('%H:%M:%S', time.gmtime(duration_seconds))
 
+    # Collect resolutions and audio
     available_resolutions = []
     available_audio = []
-
     for f in formats:
         if f['ext'] == 'mp4' and f.get('vcodec') != 'none':
             resolution = f"{f.get('height', 'Unknown')}p"
@@ -79,7 +79,7 @@ async def youtube_link_handler(bot, msg):
             format_id = f.get('format_id')
             if format_id:
                 filesize_str = humanbytes(filesize) if filesize else 'Unknown'
-                available_resolutions.append((resolution, filesize_str, format_id))
+                available_resolutions.append((int(f.get('height', 0)), resolution, filesize_str, format_id))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
             format_id = f.get('format_id')
@@ -87,26 +87,30 @@ async def youtube_link_handler(bot, msg):
                 filesize_str = humanbytes(filesize) if filesize else 'Unknown'
                 available_audio.append((filesize or 0, filesize_str, format_id))
 
+    # Sort resolutions ascending
+    available_resolutions.sort(key=lambda x: x[0])
+
+    # Build buttons in 2 columns
     buttons = []
     row = []
-    for resolution, size, format_id in available_resolutions:
-        button_text = f"🎬 {resolution} - {size}"
-        callback_data = f"yt_{format_id}_{resolution}_{url}"
-        row.append(InlineKeyboardButton(button_text, callback_data=callback_data))
+    for _, resolution, size, format_id in available_resolutions:
+        row.append(InlineKeyboardButton(f"{resolution} - {size}", callback_data=f"yt_{format_id}_{resolution}_{url}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
     if row:
         buttons.append(row)
 
+    # Audio button
     if available_audio:
         highest_quality_audio = max(available_audio, key=lambda x: x[0])
         _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
+    # Thumbnail & Description
     buttons.append([
-        InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
-        InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
+        InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}"),
+        InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}")
     ])
 
     markup = InlineKeyboardMarkup(buttons)
@@ -126,7 +130,7 @@ async def youtube_link_handler(bot, msg):
                 thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
                 with open(thumb_path, 'wb') as f:
                     f.write(resp.content)
-                await bot.send_photo(
+                thumbnail_message = await bot.send_photo(
                     chat_id=msg.chat.id,
                     photo=thumb_path,
                     caption=caption,
@@ -135,9 +139,9 @@ async def youtube_link_handler(bot, msg):
                 )
                 os.remove(thumb_path)
             else:
-                await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
+                thumbnail_message = await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
         else:
-            await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
+            thumbnail_message = await bot.send_message(msg.chat.id, text=caption, reply_markup=markup, parse_mode=enums.ParseMode.MARKDOWN)
     except Exception as e:
         await processing_message.edit_text(f"❌ **Error sending video options:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
 
@@ -145,7 +149,7 @@ async def youtube_link_handler(bot, msg):
     await processing_message.delete()
 
 
-# Handle resolution/audio selection
+# Download / resolution callback
 @Client.on_callback_query(filters.regex(r'^yt_\d+_\d+p.*_https?://'))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -158,16 +162,9 @@ async def yt_callback_handler(bot, query):
     except Exception:
         title = "Unknown Title"
 
-    download_message = await bot.send_message(
-        chat_id=query.message.chat.id,
-        text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
-
-    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
+    # Initialize progress
+    progress = YTDLProgress(bot, query.message.chat.id)
     progress.update_task = asyncio.create_task(progress.process_queue())
-
-    await progress.update_msg(f"**🎞 {title}**\n**📹 {resolution}**\n📥 **Downloading:** Initializing...")
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -191,23 +188,23 @@ async def yt_callback_handler(bot, query):
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
         await progress.cleanup()
-        await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    await asyncio.sleep(3)
-    await progress.cleanup()
-    await download_message.delete()
-
+    # Update caption with download complete
     try:
         final_filesize = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
         duration = int(video.duration)
-        video_width, video_height = video.size
         filesize = humanbytes(final_filesize)
     except Exception as e:
         await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    # Delete download progress message
+    await progress.cleanup()
+
+    # Upload video
     thumb_url = info_dict.get('thumbnail', None)
     thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
     if thumb_url:
@@ -247,7 +244,6 @@ async def yt_callback_handler(bot, query):
         return
 
     await uploading_message.delete()
-
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
