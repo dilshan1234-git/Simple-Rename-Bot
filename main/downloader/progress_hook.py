@@ -2,7 +2,7 @@ import time
 import math
 import asyncio
 import logging
-from pyrogram import enums  # Import enums from pyrogram
+from pyrogram import enums
 from main.utils import humanbytes
 
 # Set up logging to debug issues with message updates
@@ -40,7 +40,7 @@ class YTDLProgress:
         """
         status = d.get('status', None)
         now = time.time()
-        if now - self.last_update_time < 1:
+        if now - self.last_update_time < 2:  # Increased to 2 seconds to avoid rate limits
             return
         self.last_update_time = now
 
