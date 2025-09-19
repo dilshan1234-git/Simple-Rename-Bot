@@ -14,6 +14,7 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
+
 # /ytdl command
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
@@ -152,6 +153,7 @@ async def yt_callback_handler(bot, query):
     # Initialize live progress using YTDLProgress
     progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
     progress.update_task = asyncio.create_task(progress.process_queue())
+    await progress.update_msg(f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -178,7 +180,6 @@ async def yt_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Cleanup downloading progress
     await progress.cleanup()
     await query.message.delete()
 
