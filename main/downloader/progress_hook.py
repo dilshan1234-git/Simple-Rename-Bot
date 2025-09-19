@@ -1,5 +1,4 @@
 # main/downloader/progress_hook.py
-
 import asyncio
 import time
 from pyrogram.enums import ParseMode
@@ -7,13 +6,12 @@ from main.utils import humanbytes
 
 last_update_time = {}
 
-
 class YTDLProgress:
-    def __init__(self, bot, chat_id, prefix_text=""):
+    def __init__(self, bot, chat_id, prefix_text="", edit_msg=None):
         self.bot = bot
         self.chat_id = chat_id
         self.prefix_text = prefix_text
-        self.msg = None
+        self.msg = edit_msg  # If provided, edit this message instead of creating new one
         self.queue = asyncio.Queue()
         self.update_task = None
 
@@ -27,10 +25,18 @@ class YTDLProgress:
             )
         else:
             try:
-                await self.msg.edit_text(
-                    f"{self.prefix_text}\n\n{text}",
-                    parse_mode=ParseMode.MARKDOWN
-                )
+                if hasattr(self.msg, 'caption') and self.msg.caption is not None:
+                    # Edit caption if it's a photo message
+                    await self.msg.edit_caption(
+                        caption=f"{self.prefix_text}\n\n{text}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
+                else:
+                    # Edit text if it's a text message
+                    await self.msg.edit_text(
+                        f"{self.prefix_text}\n\n{text}",
+                        parse_mode=ParseMode.MARKDOWN
+                    )
             except Exception:
                 pass
 
@@ -58,32 +64,29 @@ class YTDLProgress:
                 now = time.time()
                 if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 3):
                     last_update_time[self.chat_id] = now
-
+                    
                     total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
                     downloaded = d.get("downloaded_bytes", 0)
                     speed = d.get("speed", 0)
                     eta = d.get("eta", 0)
-
                     percent = (downloaded * 100 / total_bytes) if total_bytes else 0
-
+                    
                     text = (
-                        f"📥 **Downloading...**\n\n"
                         f"**Progress:** {percent:.2f}%\n"
                         f"**Downloaded:** {humanbytes(downloaded)} / {humanbytes(total_bytes) if total_bytes else '?'}\n"
                         f"**⚡️ Speed:** {humanbytes(speed)}/s\n"
                         f"**⏰ ETA:** {time.strftime('%H:%M:%S', time.gmtime(eta))}"
                     )
-
                     self.enqueue(text)
-
+                    
             elif d["status"] == "finished":
                 text = (
                     f"✅ **Download Completed!**\n\n"
-                    f"**📂 File:** {d.get('filename', 'Unknown')}\n\n"
+                    f"**📂 File:** {d.get('filename', 'Unknown')}\n"
                     f"**💾 Total Size:** {humanbytes(d.get('total_bytes', 0))}"
                 )
                 self.enqueue(text)
-
+                
         except Exception as e:
             self.enqueue(f"❌ Error in progress hook: `{e}`")
 
