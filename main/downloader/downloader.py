@@ -204,10 +204,12 @@ async def yt_callback_handler(bot, query):
     # Initialize the YTDLProgress class
     progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
 
-    # Send initial progress message after a delay to ensure "Download started" is visible
-    await asyncio.sleep(2)
+    # Start the queue processor task
+    progress.update_task = asyncio.create_task(progress.process_queue())
+
+    # Send initial progress message
     initial_progress_text = f"**🎞 {title}**\n**📹 {resolution}**\n📥 **Downloading:** Initializing..."
-    await progress.update_msg(initial_progress_text)  # Await the initial message
+    await progress.update_msg(initial_progress_text)
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
