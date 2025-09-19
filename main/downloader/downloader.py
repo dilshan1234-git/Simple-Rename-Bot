@@ -142,12 +142,12 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Initialize live progress with YTDLProgress, edit caption of existing message
-    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
-    progress.update_task = asyncio.create_task(progress.process_queue())
-
     # Remove buttons immediately
     await query.message.edit_reply_markup(reply_markup=None)
+
+    # Initialize live download progress
+    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
+    progress.update_task = asyncio.create_task(progress.process_queue())
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -174,10 +174,11 @@ async def yt_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error during download:** {str(e)}")
         return
 
-    # Cleanup downloading progress
+    # Remove download progress caption
     await progress.cleanup()
+    await query.message.edit_caption(caption=f"✅ **Download Completed!**\n\n🎞 {title}")
 
-    # Upload video
+    # Upload video in a new message with thumbnail
     try:
         final_size = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
@@ -196,9 +197,9 @@ async def yt_callback_handler(bot, query):
             with open(thumb_path, 'wb') as f:
                 f.write(resp.content)
 
-    # Show upload started in caption of same thumbnail
-    upload_progress_text = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}"
-    await query.message.edit_caption(caption=upload_progress_text)
+    # Upload progress message with thumbnail
+    upload_caption = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}"
+    upload_msg = await bot.send_photo(query.message.chat.id, photo=thumb_path if thumb_path else TELEGRAPH_IMAGE_URL, caption=upload_caption)
 
     try:
         await bot.send_video(
@@ -208,10 +209,10 @@ async def yt_callback_handler(bot, query):
             caption=f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**",
             duration=duration,
             progress=progress_message,
-            progress_args=(f"**📤 Uploading Started...**\n\n🎞 {info_dict['title']}", query.message, time.time())
+            progress_args=(f"**📤 Uploading Started...**\n\n🎞 {info_dict['title']}", upload_msg, time.time())
         )
     except Exception as e:
-        await query.message.edit_caption(f"❌ **Error during upload:** {str(e)}")
+        await upload_msg.edit_caption(f"❌ **Error during upload:** {str(e)}")
         return
 
     os.remove(downloaded_path)
