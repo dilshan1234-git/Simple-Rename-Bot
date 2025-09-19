@@ -120,6 +120,7 @@ async def youtube_link_handler(bot, msg):
         f"📥 **Select your resolution or audio format:**"
     )
 
+    # Send thumbnail with initial caption
     if thumb_url:
         resp = requests.get(thumb_url)
         if resp.status_code == 200:
@@ -150,10 +151,10 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Initialize live progress using YTDLProgress
+    # Initialize live progress using YTDLProgress attached to thumbnail
     progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
+    progress.msg = query.message  # attach progress to existing thumbnail message
     progress.update_task = asyncio.create_task(progress.process_queue())
-    await progress.update_msg(f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -180,6 +181,7 @@ async def yt_callback_handler(bot, query):
         await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
+    # Cleanup downloading progress
     await progress.cleanup()
     await query.message.delete()
 
