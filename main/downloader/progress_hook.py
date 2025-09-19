@@ -6,7 +6,7 @@ from queue import Queue
 
 logger = logging.getLogger(__name__)
 
-class ProgressHook:
+class YTDLProgress:
     def __init__(self, update_msg, prefix_text="Downloading: "):
         """
         :param update_msg: async function to update Telegram message
