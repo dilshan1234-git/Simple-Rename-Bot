@@ -149,21 +149,42 @@ async def yt_callback_handler(bot, query):
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-    # Initialize live progress with YTDLProgress to edit the current message
-    progress = YTDLProgress(bot, query.message.chat.id, f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", query.message)
-    progress.update_task = asyncio.create_task(progress.process_queue())
-
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [progress.hook],
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
         'retries': 10,
         'fragment_retries': 10,
     }
+
+    # Create a custom progress hook that uses progress_message function
+    download_start_time = time.time()
+    
+    def download_progress_hook(d):
+        try:
+            if d["status"] == "downloading":
+                # Extract progress info safely
+                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                downloaded = d.get("downloaded_bytes") or 0
+                
+                if total_bytes > 0 and downloaded > 0:
+                    # Use the same progress_message function as upload
+                    asyncio.create_task(
+                        progress_message(
+                            downloaded,
+                            total_bytes,
+                            f"**📥 Downloading...**\n\n🎞 {title}\n📹 {resolution}",
+                            query.message,
+                            download_start_time
+                        )
+                    )
+        except Exception:
+            pass
+
+    ydl_opts['progress_hooks'] = [download_progress_hook]
 
     def download_video():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -174,17 +195,20 @@ async def yt_callback_handler(bot, query):
     try:
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
-        await progress.cleanup()
         await query.message.edit_caption(
             caption=f"❌ **Error during download:** {str(e)}",
             parse_mode=enums.ParseMode.MARKDOWN
         )
         return
 
-    # Cleanup downloading progress and delete the original message
-    await progress.cleanup()
+    # Show download completed briefly
+    await query.message.edit_caption(
+        caption=f"✅ **Download Completed!**\n\n🎞 {title}\n📹 {resolution}",
+        parse_mode=enums.ParseMode.MARKDOWN
+    )
     
-    # Delete the original message with download progress
+    # Delete the original message after a short delay
+    await asyncio.sleep(1)
     await query.message.delete()
 
     # Process video info
