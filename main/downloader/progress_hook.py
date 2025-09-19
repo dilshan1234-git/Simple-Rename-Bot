@@ -16,7 +16,11 @@ class YTDLProgress:
         self.prefix_text = prefix_text
         self.last_update_time = 0
         self.message = None  # Will be set after sending the first message
-        self.loop = asyncio.get_running_loop()
+        try:
+            self.loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
 
     async def update_msg(self, text, retries=3, delay=2):
         attempt = 0
@@ -62,7 +66,7 @@ class YTDLProgress:
         """
         status = d.get('status', None)
         now = time.time()
-        if now - self.last_update_time < 10:  # Increased to 10 seconds to avoid rate limits
+        if now - self.last_update_time < 10:  # 10 seconds to avoid rate limits
             return
         self.last_update_time = now
 
