@@ -9,10 +9,10 @@ from moviepy.editor import VideoFileClip
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
-from main.downloader.progress_hook import YTDLProgress
 import nest_asyncio
 
 nest_asyncio.apply()
+
 
 # /ytdl command
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
@@ -24,6 +24,7 @@ async def ytdl(bot, msg):
         caption=caption_text,
         parse_mode=enums.ParseMode.MARKDOWN
     )
+
 
 # Handle YouTube links
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
@@ -71,20 +72,14 @@ async def youtube_link_handler(bot, msg):
                 resolution += f"{fps}fps"
             filesize = f.get('filesize') or f.get('filesize_approx')
             if filesize:
-                size_str = humanbytes(filesize)
-                available_resolutions.append((resolution, size_str, f['format_id']))
+                available_resolutions.append((resolution, humanbytes(filesize), f['format_id']))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
             if filesize:
-                size_str = humanbytes(filesize)
-                available_audio.append((filesize, size_str, f['format_id']))
+                available_audio.append((filesize, humanbytes(filesize), f['format_id']))
 
     # Sort resolutions numerically
-    def res_sort_key(item):
-        res_name = item[0]
-        digits = ''.join(filter(str.isdigit, res_name))
-        return int(digits) if digits else 0
-    available_resolutions.sort(key=res_sort_key)
+    available_resolutions.sort(key=lambda x: int(''.join(filter(str.isdigit, x[0]))))
 
     # Build buttons
     buttons = []
@@ -97,12 +92,13 @@ async def youtube_link_handler(bot, msg):
     if row:
         buttons.append(row)
 
+    # Audio button
     if available_audio:
         highest_audio = max(available_audio, key=lambda x: x[0])
         _, size, format_id = highest_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
 
-    # Description & thumbnail
+    # Description & thumbnail buttons
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -135,7 +131,7 @@ async def youtube_link_handler(bot, msg):
     await processing_message.delete()
 
 
-# Callback handler for video/audio download
+# Callback for video/audio download
 @Client.on_callback_query(filters.regex(r'^(yt|audio)_'))
 async def yt_callback_handler(bot, query):
     data = query.data.split('_')
@@ -148,16 +144,30 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Initialize live progress
-    progress = YTDLProgress(bot, query.message.chat.id)
-    progress.update_task = asyncio.create_task(progress.process_queue())
-    await progress.update_msg(f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
+    # Live download progress message
+    downloading_msg = await bot.send_message(query.message.chat.id, f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}", parse_mode=enums.ParseMode.MARKDOWN)
+    start_time = time.time()
+
+    def progress_hook(d):
+        try:
+            if d["status"] == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                downloaded = d.get("downloaded_bytes", 0)
+                speed = d.get("speed", 0)
+                eta = d.get("eta", 0)
+                percent = (downloaded * 100 / total) if total else 0
+                asyncio.run_coroutine_threadsafe(
+                    progress_message(f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", downloading_msg, start_time, downloaded, total, speed, eta),
+                    asyncio.get_event_loop()
+                )
+        except Exception:
+            pass
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
         'outtmpl': os.path.join(DOWNLOAD_LOCATION, '%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'progress_hooks': [progress.hook],
+        'progress_hooks': [progress_hook],
         'noplaylist': True,
         'quiet': True,
         'no_warnings': True,
@@ -165,21 +175,20 @@ async def yt_callback_handler(bot, query):
         'fragment_retries': 10,
     }
 
+    loop = asyncio.get_event_loop()
+
     def download_video():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             return info, ydl.prepare_filename(info)
 
-    loop = asyncio.get_event_loop()
     try:
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
-        await progress.cleanup()
-        await query.message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
+        await downloading_msg.edit_text(f"❌ **Error during download:** {e}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    await progress.cleanup()
-    await query.message.delete()
+    await downloading_msg.edit_text("✅ **Download Completed!**\n\nPreparing for upload...", parse_mode=enums.ParseMode.MARKDOWN)
 
     # Upload video
     try:
@@ -204,8 +213,15 @@ async def yt_callback_handler(bot, query):
     uploading_msg = await bot.send_message(query.message.chat.id, "🚀 **Uploading started...** 📤", parse_mode=enums.ParseMode.MARKDOWN)
 
     try:
-        await bot.send_video(query.message.chat.id, video=downloaded_path, thumb=thumb_path, caption=caption, duration=duration,
-                             progress=progress_message, progress_args=(f"**📤 Uploading Started... ❤\n\n🎞 {info_dict['title']}**", uploading_msg, time.time()))
+        await bot.send_video(
+            query.message.chat.id,
+            video=downloaded_path,
+            thumb=thumb_path,
+            caption=caption,
+            duration=duration,
+            progress=progress_message,
+            progress_args=(f"📤 **Uploading...**\n\n🎞 {info_dict['title']}", uploading_msg, time.time())
+        )
     except Exception as e:
         await uploading_msg.edit_text(f"❌ **Error during upload:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
