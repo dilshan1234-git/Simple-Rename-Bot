@@ -16,7 +16,7 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-# Set up logging to debug issues
+# Set up logging with reduced verbosity
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -59,7 +59,7 @@ async def youtube_link_handler(bot, msg):
             likes = info_dict.get('like_count', 'N/A')
             thumb_url = info_dict.get('thumbnail', None)
             description = info_dict.get('description', 'No description available.')
-            formats = info_dict.get('formats', [])      
+            formats = info_dict.get('formats', [])
             duration_seconds = info_dict.get('duration', 0)
             uploader = info_dict.get('uploader', 'Unknown Channel')
     except Exception as e:
@@ -112,7 +112,7 @@ async def youtube_link_handler(bot, msg):
         highest_quality_audio = max(available_audio, key=lambda x: x[0])
         _, size, format_id = highest_quality_audio
         buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
-    
+
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -187,19 +187,16 @@ async def yt_callback_handler(bot, query):
     except IndexError:
         title = "Unknown Title"
 
-    # Send the "Download started" message by editing the query message
+    # Send the "Download started" message
     try:
-        download_message = await query.message.edit_text(
-            f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        logger.error(f"Failed to edit download started message: {str(e)}")
         download_message = await bot.send_message(
             chat_id=query.message.chat.id,
             text=f"📥 **Download started...**\n\n**🎞 {title}**\n\n**📹 {resolution}**",
             parse_mode=enums.ParseMode.MARKDOWN
         )
+    except Exception as e:
+        logger.error(f"Failed to send download started message: {str(e)}")
+        return
 
     # Initialize the YTDLProgress class
     progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"**🎞 {title}**\n**📹 {resolution}**")
@@ -254,8 +251,7 @@ async def yt_callback_handler(bot, query):
         await download_message.edit_text(f"❌ **Error during download:** {str(e)}", parse_mode=enums.ParseMode.MARKDOWN)
         return
 
-    # Delay before cleanup to allow late hook calls
-    await asyncio.sleep(5)
+    await asyncio.sleep(5)  # Allow late hook calls
     await progress.cleanup()
     try:
         await download_message.delete()
