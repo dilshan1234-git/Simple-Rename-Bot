@@ -142,11 +142,15 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Remove buttons immediately
+    # Remove buttons and update caption to show downloading started
     await query.message.edit_reply_markup(reply_markup=None)
+    await query.message.edit_caption(
+        caption=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}",
+        parse_mode=enums.ParseMode.MARKDOWN
+    )
 
-    # Initialize live download progress
-    progress = YTDLProgress(bot, query.message.chat.id, prefix_text=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}")
+    # Initialize live progress with YTDLProgress
+    progress = YTDLProgress(bot, query.message.chat.id, query.message.id, prefix_text=f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}")
     progress.update_task = asyncio.create_task(progress.process_queue())
 
     ydl_opts = {
@@ -171,36 +175,64 @@ async def yt_callback_handler(bot, query):
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
         await progress.cleanup()
-        await query.message.edit_text(f"❌ **Error during download:** {str(e)}")
+        await query.message.edit_caption(
+            caption=f"❌ **Error during download:** {str(e)}",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
         return
 
-    # Remove download progress caption
+    # Cleanup downloading progress and show download completed
     await progress.cleanup()
-    await query.message.edit_caption(caption=f"✅ **Download Completed!**\n\n🎞 {title}")
+    await query.message.edit_caption(
+        caption=f"✅ **Download Completed!**\n\n🎞 {title}\n📹 {resolution}",
+        parse_mode=enums.ParseMode.MARKDOWN
+    )
 
-    # Upload video in a new message with thumbnail
+    # Process video info
     try:
         final_size = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
         duration = int(video.duration)
         filesize = humanbytes(final_size)
+        video.close()
     except Exception as e:
-        await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}")
+        await query.message.edit_caption(
+            caption=f"❌ **Error processing video:** {str(e)}",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
         return
 
+    # Prepare thumbnail for upload
     thumb_path = None
     thumb_url = info_dict.get('thumbnail', None)
     if thumb_url:
         resp = requests.get(thumb_url)
         if resp.status_code == 200:
-            thumb_path = os.path.join(DOWNLOAD_LOCATION, 'thumb.jpg')
+            thumb_path = os.path.join(DOWNLOAD_LOCATION, 'upload_thumb.jpg')
             with open(thumb_path, 'wb') as f:
                 f.write(resp.content)
 
-    # Upload progress message with thumbnail
-    upload_caption = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}"
-    upload_msg = await bot.send_photo(query.message.chat.id, photo=thumb_path if thumb_path else TELEGRAPH_IMAGE_URL, caption=upload_caption)
+    # Delete the download completed message
+    await query.message.delete()
 
+    # Send new message for upload with thumbnail
+    upload_caption = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}\n📹 {resolution}"
+    
+    if thumb_path and os.path.exists(thumb_path):
+        upload_msg = await bot.send_photo(
+            query.message.chat.id,
+            photo=thumb_path,
+            caption=upload_caption,
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+    else:
+        upload_msg = await bot.send_message(
+            query.message.chat.id,
+            text=upload_caption,
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+
+    # Upload video with progress
     try:
         await bot.send_video(
             query.message.chat.id,
@@ -209,13 +241,23 @@ async def yt_callback_handler(bot, query):
             caption=f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**",
             duration=duration,
             progress=progress_message,
-            progress_args=(f"**📤 Uploading Started...**\n\n🎞 {info_dict['title']}", upload_msg, time.time())
+            progress_args=(f"**📤 Uploading...**\n\n🎞 {info_dict['title']}\n📹 {resolution}", upload_msg, time.time()),
+            parse_mode=enums.ParseMode.MARKDOWN
         )
+        
+        # Delete upload progress message after successful upload
+        await upload_msg.delete()
+        
     except Exception as e:
-        await upload_msg.edit_caption(f"❌ **Error during upload:** {str(e)}")
+        await upload_msg.edit_caption(
+            caption=f"❌ **Error during upload:** {str(e)}",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
         return
 
-    os.remove(downloaded_path)
+    # Cleanup files
+    if os.path.exists(downloaded_path):
+        os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
 
