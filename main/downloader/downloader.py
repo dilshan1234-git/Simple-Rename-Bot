@@ -150,10 +150,13 @@ async def yt_callback_handler(bot, query):
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-    # Initialize live progress with YTDLProgress to edit the current message
-    progress = YTDLProgress(bot, query.message.chat.id, ud_type=f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", message_obj=query.message)
-    progress.update_task = asyncio.create_task(progress.process_queue())
-
+    # Initialize progress with YTDLProgress using the same message
+    progress = YTDLProgress(
+        bot=bot, 
+        chat_id=query.message.chat.id, 
+        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**", 
+        edit_msg=query.message
+    )
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -176,15 +179,13 @@ async def yt_callback_handler(bot, query):
     try:
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
-        await progress.cleanup()
         await query.message.edit_caption(
             caption=f"❌ **Error during download:** {str(e)}",
             parse_mode=enums.ParseMode.MARKDOWN
         )
         return
 
-    # Cleanup downloading progress and delete the original message
-    await progress.cleanup()
+    # Delete the download progress message
     await query.message.delete()
 
     # Process video info
