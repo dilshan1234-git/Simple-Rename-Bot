@@ -14,6 +14,7 @@ class YTDLProgress:
         self.msg = edit_msg  # If provided, edit this message instead of creating new one
         self.queue = asyncio.Queue()
         self.update_task = None
+        self.start_time = time.time()
 
     async def update_msg(self, text: str):
         """Send or edit progress message"""
@@ -65,28 +66,16 @@ class YTDLProgress:
                 if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 3):
                     last_update_time[self.chat_id] = now
                     
-                    # Safely handle None values
                     total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     downloaded = d.get("downloaded_bytes") or 0
-                    speed = d.get("speed") or 0
-                    eta = d.get("eta") or 0
-                    
-                    # Convert to numbers safely
-                    try:
-                        total_bytes = float(total_bytes) if total_bytes else 0
-                        downloaded = float(downloaded) if downloaded else 0
-                        speed = float(speed) if speed else 0
-                        eta = float(eta) if eta else 0
-                    except (ValueError, TypeError):
-                        total_bytes = downloaded = speed = eta = 0
-                    
-                    # Use same style as uploading progress
+
+                    # Format progress message using the same style as upload
                     text = progress_message(
                         current=downloaded,
                         total=total_bytes,
-                        speed=speed,
-                        eta=eta,
-                        prefix="Downloading"
+                        message="📥 Downloading...",
+                        message_obj=self.msg,
+                        start_time=self.start_time
                     )
                     self.enqueue(text)
                     
