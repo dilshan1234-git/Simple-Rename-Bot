@@ -9,7 +9,7 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
-from main.downloader.progress_hook import YTDLProgress
+from main.downloader.progress_hook import ProgressHook as YTDLProgress
 import nest_asyncio
 
 nest_asyncio.apply()
