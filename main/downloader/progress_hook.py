@@ -2,7 +2,7 @@
 import asyncio
 import time
 from pyrogram.enums import ParseMode
-from main.utils import humanbytes
+from main.utils import humanbytes, progress_message
 
 last_update_time = {}
 
@@ -80,30 +80,13 @@ class YTDLProgress:
                     except (ValueError, TypeError):
                         total_bytes = downloaded = speed = eta = 0
                     
-                    # Calculate percentage safely
-                    if total_bytes > 0:
-                        percent = (downloaded * 100 / total_bytes)
-                    else:
-                        percent = 0
-                    
-                    # Format ETA safely
-                    if eta > 0 and eta < 86400:  # Less than 24 hours
-                        eta_str = time.strftime('%H:%M:%S', time.gmtime(int(eta)))
-                    else:
-                        eta_str = "Unknown"
-                    
-                    # Format speed safely
-                    speed_str = humanbytes(int(speed)) if speed > 0 else "0 B"
-                    
-                    # Format sizes safely
-                    downloaded_str = humanbytes(int(downloaded))
-                    total_str = humanbytes(int(total_bytes)) if total_bytes > 0 else "Unknown"
-                    
-                    text = (
-                        f"**Progress:** {percent:.1f}%\n"
-                        f"**Downloaded:** {downloaded_str} / {total_str}\n"
-                        f"**⚡️ Speed:** {speed_str}/s\n"
-                        f"**⏰ ETA:** {eta_str}"
+                    # Use same style as uploading progress
+                    text = progress_message(
+                        current=downloaded,
+                        total=total_bytes,
+                        speed=speed,
+                        eta=eta,
+                        prefix="Downloading"
                     )
                     self.enqueue(text)
                     
