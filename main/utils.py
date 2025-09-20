@@ -27,31 +27,75 @@ def generate_progress_bar(percentage, length=20):
     )
     return bar
 
+# Store last update time per message to prevent spam
+message_update_times = {}
+
 async def progress_message(current, total, ud_type, message, start):
     now = time.time()
     diff = now - start
-    if round(diff % 10.00) == 0 or current == total:
-        percentage = current * 100 / total
-        speed = current / diff
-        elapsed_time = round(diff) * 1000
-        time_to_completion = round((total - current) / speed) * 1000
-        estimated_total_time = elapsed_time + time_to_completion
-        elapsed_time = TimeFormatter(milliseconds=elapsed_time)
-        estimated_total_time = TimeFormatter(milliseconds=estimated_total_time)
-        bar = generate_progress_bar(percentage)
-        tmp = PROGRESS_BAR.format(
-            bar=bar,
-            a=round(percentage, 2),
-            b=humanbytes(current),
-            c=humanbytes(total),
-            d=humanbytes(speed),
-            f=estimated_total_time if estimated_total_time != '' else "0 s"
-        )
-        try:
-            chance = [[InlineKeyboardButton("🚫 Cancel", callback_data="del")]]
-            await message.edit(text="{}\n{}".format(ud_type, tmp), reply_markup=InlineKeyboardMarkup(chance))
-        except:
-            pass
+    
+    # Get message identifier for tracking
+    msg_id = f"{message.chat.id}_{message.id}" if hasattr(message, 'id') else str(id(message))
+    
+    # More frequent updates - every 1 second instead of 10
+    if msg_id in message_update_times:
+        time_since_last = now - message_update_times[msg_id]
+        if time_since_last < 1.0 and current != total:  # Update every 1 second
+            return
+    
+    message_update_times[msg_id] = now
+    
+    # Avoid division by zero
+    if diff <= 0:
+        diff = 0.1
+    
+    percentage = current * 100 / total if total > 0 else 0
+    speed = current / diff
+    
+    # More accurate ETA calculation
+    if speed > 0:
+        remaining_bytes = total - current
+        eta_seconds = remaining_bytes / speed
+        estimated_total_time = TimeFormatter(int(eta_seconds * 1000))
+    else:
+        estimated_total_time = "Calculating..."
+    
+    # Elapsed time
+    elapsed_time = TimeFormatter(int(diff * 1000))
+    
+    # Generate progress bar
+    bar = generate_progress_bar(percentage)
+    
+    # Format the progress message
+    tmp = PROGRESS_BAR.format(
+        bar=bar,
+        a=round(percentage, 1),  # More precision for faster updates
+        b=humanbytes(current),
+        c=humanbytes(total),
+        d=humanbytes(speed),
+        f=estimated_total_time if estimated_total_time != '' else "0 s"
+    )
+    
+    try:
+        # Cancel button
+        chance = [[InlineKeyboardButton("🚫 Cancel", callback_data="del")]]
+        
+        # Try to update the message
+        full_text = "{}\n{}".format(ud_type, tmp)
+        
+        if hasattr(message, 'edit'):
+            await message.edit(text=full_text, reply_markup=InlineKeyboardMarkup(chance))
+        elif hasattr(message, 'edit_text'):
+            await message.edit_text(full_text, reply_markup=InlineKeyboardMarkup(chance))
+        elif hasattr(message, 'edit_caption'):
+            await message.edit_caption(caption=full_text, reply_markup=InlineKeyboardMarkup(chance))
+            
+    except Exception as e:
+        # Handle rate limiting more gracefully
+        if "Too Many Requests" in str(e) or "FLOOD_WAIT" in str(e):
+            # Increase update interval for this message
+            message_update_times[msg_id] = now + 2  # Wait 2 extra seconds
+        pass
 
 def humanbytes(size):
     units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
@@ -63,13 +107,20 @@ def humanbytes(size):
     return "%.2f %s" % (size, units[i])
 
 def TimeFormatter(milliseconds: int) -> str:
+    if milliseconds <= 0:
+        return "0s"
+    
     seconds, milliseconds = divmod(int(milliseconds), 1000)
     minutes, seconds = divmod(seconds, 60)
     hours, minutes = divmod(minutes, 60)
     days, hours = divmod(hours, 24)
-    tmp = ((str(days) + "d, ") if days else "") + \
-          ((str(hours) + "h, ") if hours else "") + \
-          ((str(minutes) + "m, ") if minutes else "") + \
-          ((str(seconds) + "s, ") if seconds else "") + \
-          ((str(milliseconds) + "ms, ") if milliseconds else "")
-    return tmp[:-2]
+    
+    # More readable format for shorter times
+    if days:
+        return f"{days}d {hours}h {minutes}m"
+    elif hours:
+        return f"{hours}h {minutes}m {seconds}s"
+    elif minutes:
+        return f"{minutes}m {seconds}s"
+    else:
+        return f"{seconds}s"
