@@ -13,13 +13,72 @@ class YTDLProgress:
         self.prefix_text = prefix_text
         self.msg = edit_msg  # If provided, edit this message instead of creating new one
         self.start_time = time.time()
+        self.current_data = {}
+        self.update_task = None
+        self.running = True
+
+    async def start_updater(self):
+        """Start the background updater task"""
+        self.update_task = asyncio.create_task(self._progress_updater())
+
+    async def stop_updater(self):
+        """Stop the background updater task"""
+        self.running = False
+        if self.update_task:
+            self.update_task.cancel()
+            try:
+                await self.update_task
+            except asyncio.CancelledError:
+                pass
+
+    async def _progress_updater(self):
+        """Background task to update progress messages"""
+        while self.running:
+            try:
+                if self.current_data and self.msg:
+                    data = self.current_data.copy()
+                    
+                    if data.get("status") == "downloading":
+                        total_bytes = data.get("total_bytes", 0)
+                        downloaded = data.get("downloaded_bytes", 0)
+                        
+                        if total_bytes > 0:
+                            await progress_message(
+                                current=int(downloaded),
+                                total=int(total_bytes),
+                                ud_type=self.prefix_text,
+                                message=self.msg,
+                                start=self.start_time
+                            )
+                    
+                    elif data.get("status") == "finished":
+                        filename = data.get('filename', 'Unknown')
+                        if filename and len(filename) > 50:
+                            filename = "..." + filename[-47:]
+                        
+                        total_bytes = data.get('total_bytes', 0)
+                        text = (
+                            f"✅ **Download Completed!**\n\n"
+                            f"**📂 File:** {filename}\n"
+                            f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
+                        )
+                        await self._update_msg(text)
+                        break
+                
+                await asyncio.sleep(1)  # Update every second
+                
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                await self._update_msg(f"❌ Error in progress updater: `{str(e)}`")
+                await asyncio.sleep(1)
 
     def hook(self, d):
-        """yt-dlp progress hook using progress_message style"""
+        """yt-dlp progress hook - just store data, don't update directly"""
         try:
             if d["status"] == "downloading":
                 now = time.time()
-                if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 3):
+                if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 2):
                     last_update_time[self.chat_id] = now
                     
                     # Safely handle None values
@@ -33,42 +92,32 @@ class YTDLProgress:
                     except (ValueError, TypeError):
                         total_bytes = downloaded = 0
                     
-                    # Use progress_message function for consistent styling
-                    if total_bytes > 0:
-                        asyncio.create_task(
-                            progress_message(
-                                current=int(downloaded),
-                                total=int(total_bytes),
-                                ud_type=self.prefix_text,
-                                message=self.msg,
-                                start=self.start_time
-                            )
-                        )
+                    # Store data for async updater
+                    self.current_data = {
+                        "status": "downloading",
+                        "total_bytes": total_bytes,
+                        "downloaded_bytes": downloaded
+                    }
                     
             elif d["status"] == "finished":
-                # Safely handle finished status
-                filename = d.get('filename', 'Unknown')
-                if filename and len(filename) > 50:
-                    filename = "..." + filename[-47:]  # Truncate long filenames
-                
-                total_bytes = d.get('total_bytes') or 0
+                # Store finished status data
+                total_bytes = d.get('total_bytes', 0)
                 try:
                     total_bytes = float(total_bytes) if total_bytes else 0
                 except (ValueError, TypeError):
                     total_bytes = 0
                 
-                # Update message to show completion
-                if self.msg:
-                    text = (
-                        f"✅ **Download Completed!**\n\n"
-                        f"**📂 File:** {filename}\n"
-                        f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
-                    )
-                    asyncio.create_task(self._update_msg(text))
+                self.current_data = {
+                    "status": "finished",
+                    "filename": d.get('filename', 'Unknown'),
+                    "total_bytes": total_bytes
+                }
                 
         except Exception as e:
-            if self.msg:
-                asyncio.create_task(self._update_msg(f"❌ Error in progress hook: `{str(e)}`"))
+            self.current_data = {
+                "status": "error",
+                "error": str(e)
+            }
 
     async def _update_msg(self, text: str):
         """Update message with new text"""
