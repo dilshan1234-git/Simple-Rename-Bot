@@ -96,7 +96,7 @@ async def youtube_link_handler(bot, msg):
     buttons = []
     row = []
     for resolution, size, format_id in available_resolutions:
-        row.append(InlineKeyboardButton(f"📹 {resolution} - {size}", callback_data=f"yt_{format_id}_{resolution}_{url}"))
+        row.append(InlineKeyboardButton(f"🎬 {resolution} - {size}", callback_data=f"yt_{format_id}_{resolution}_{url}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -223,7 +223,7 @@ async def yt_callback_handler(bot, query):
                 thumb_path = None
 
     # Send new message for upload with thumbnail
-    upload_caption = f"🚀 **Uploading Started...**\n\n🎞 {info_dict['title']}\n📹 {resolution}"
+    upload_caption = f"🚀 **Uploading Started...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**"
     if thumb_path and os.path.exists(thumb_path):
         upload_msg = await bot.send_photo(
             query.message.chat.id,
@@ -247,7 +247,7 @@ async def yt_callback_handler(bot, query):
             caption=f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**",
             duration=duration,
             progress=progress_message,
-            progress_args=(f"**📤 Uploading...**\n\n🎞 {info_dict['title']}\n📹 {resolution}", upload_msg, time.time()),
+            progress_args=(f"**📤 Uploading...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**", upload_msg, time.time()),
             parse_mode=enums.ParseMode.MARKDOWN
         )
         await upload_msg.delete()
