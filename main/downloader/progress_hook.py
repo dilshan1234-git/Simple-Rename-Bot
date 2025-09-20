@@ -6,56 +6,38 @@ from main.utils import progress_message, humanbytes
 last_update_time = {}
 
 class YTDLProgress:
-    def __init__(self, bot, chat_id, prefix_text="", edit_msg=None):
+    def __init__(self, bot, chat_id, ud_type="", message_obj=None):
         """
         bot: pyrogram Client
         chat_id: chat where progress should be displayed
-        prefix_text: text to prepend to progress message
-        edit_msg: optional message object to edit instead of sending new
+        ud_type: Upload/Download type text (like "📥 Downloading...")
+        message_obj: message object to edit
         """
         self.bot = bot
         self.chat_id = chat_id
-        self.prefix_text = prefix_text
-        self.msg = edit_msg
+        self.ud_type = ud_type
+        self.msg = message_obj
         self.queue = asyncio.Queue()
         self.update_task = None
-
-    async def update_msg(self, text: str):
-        """Send or edit a message with the current progress"""
-        if self.msg is None:
-            self.msg = await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=f"{self.prefix_text}\n\n{text}"
-            )
-        else:
-            try:
-                if hasattr(self.msg, 'caption') and self.msg.caption is not None:
-                    await self.msg.edit_caption(
-                        caption=f"{self.prefix_text}\n\n{text}"
-                    )
-                else:
-                    await self.msg.edit_text(
-                        f"{self.prefix_text}\n\n{text}"
-                    )
-            except Exception:
-                pass
+        self.start_time = time.time()
 
     async def process_queue(self):
         """Continuously process the queue and update the message"""
         while True:
             try:
-                text = await self.queue.get()
-                await self.update_msg(text)
+                item = await self.queue.get()
+                current, total = item[:2]
+                await progress_message(current, total, self.ud_type, self.msg, self.start_time)
                 self.queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception:
                 continue
 
-    def enqueue(self, text: str):
-        """Add a progress text to the queue"""
+    def enqueue(self, current, total):
+        """Add numbers for progress_message"""
         if not self.queue.full():
-            self.queue.put_nowait(text)
+            self.queue.put_nowait((current, total))
 
     def hook(self, d):
         """yt-dlp progress hook"""
@@ -66,32 +48,25 @@ class YTDLProgress:
                 if (self.chat_id not in last_update_time) or (now - last_update_time[self.chat_id] > 2):
                     last_update_time[self.chat_id] = now
 
-                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     downloaded = d.get("downloaded_bytes") or 0
-                    speed = d.get("speed") or 0
-                    eta = d.get("eta") or 0
+                    total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
 
-                    total_bytes = float(total_bytes) if total_bytes else 0
-                    downloaded = float(downloaded) if downloaded else 0
-                    speed = float(speed) if speed else 0
-                    eta = float(eta) if eta else 0
+                    downloaded = float(downloaded)
+                    total_bytes = float(total_bytes)
 
-                    text = f"{downloaded}|{total_bytes}|{speed}|{eta}"
-                    self.enqueue(text)
+                    if total_bytes > 0:
+                        self.enqueue(downloaded, total_bytes)
 
             elif status == "finished":
                 filename = d.get("filename", "Unknown")
                 total_bytes = d.get("total_bytes") or 0
-                total_bytes = float(total_bytes) if total_bytes else 0
+                total_bytes = float(total_bytes)
 
-                text = (
-                    f"✅ **Download Completed!**\n\n"
-                    f"**📂 File:** {filename}\n"
-                    f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
-                )
-                self.enqueue(text)
+                # Send final progress as full
+                self.enqueue(total_bytes, total_bytes)
+
         except Exception as e:
-            self.enqueue(f"❌ Error in progress hook: `{str(e)}`")
+            pass  # optional: handle errors
 
     async def cleanup(self):
         """Cancel the queue processing task"""
