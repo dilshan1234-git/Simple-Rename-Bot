@@ -16,47 +16,36 @@ class YTDLProgress:
         self.update_task = None
         self.start_time = time.time()
 
-    async def update_msg(self, text: str):
+    async def update_msg(self, coro):
         """Send or edit progress message"""
         if self.msg is None:
             self.msg = await self.bot.send_message(
                 chat_id=self.chat_id,
-                text=f"{self.prefix_text}\n\n{text}",
+                text=f"{self.prefix_text}\n\n⏳ Starting download...",
                 parse_mode=ParseMode.MARKDOWN
             )
-        else:
-            try:
-                if hasattr(self.msg, 'caption') and self.msg.caption is not None:
-                    # Edit caption if it's a photo message
-                    await self.msg.edit_caption(
-                        caption=f"{self.prefix_text}\n\n{text}",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-                else:
-                    # Edit text if it's a text message
-                    await self.msg.edit_text(
-                        f"{self.prefix_text}\n\n{text}",
-                        parse_mode=ParseMode.MARKDOWN
-                    )
-            except Exception:
-                pass
+        try:
+            # run the progress_message coroutine (it edits self.msg)
+            await coro
+        except Exception:
+            pass
 
     async def process_queue(self):
         """Process queue updates asynchronously"""
         while True:
             try:
-                text = await self.queue.get()
-                await self.update_msg(text)
+                coro = await self.queue.get()
+                await self.update_msg(coro)
                 self.queue.task_done()
             except asyncio.CancelledError:
                 break
             except Exception:
                 continue
 
-    def enqueue(self, text: str):
-        """Enqueue message text for later processing"""
+    def enqueue(self, coro):
+        """Enqueue coroutine for later processing"""
         if not self.queue.full():
-            self.queue.put_nowait(text)
+            self.queue.put_nowait(coro)
 
     def hook(self, d):
         """yt-dlp progress hook"""
@@ -69,15 +58,16 @@ class YTDLProgress:
                     total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                     downloaded = d.get("downloaded_bytes") or 0
 
-                    # Format progress message using the same style as upload
-                    text = progress_message(
-                        current=downloaded,
-                        total=total_bytes,
-                        message="📥 Downloading...",
-                        message_obj=self.msg,
-                        start_time=self.start_time
+                    # enqueue the coroutine for consistent upload-style progress
+                    self.enqueue(
+                        progress_message(
+                            current=downloaded,
+                            total=total_bytes,
+                            ud_type="📥 Downloading...",
+                            message=self.msg,
+                            start=self.start_time
+                        )
                     )
-                    self.enqueue(text)
                     
             elif d["status"] == "finished":
                 # Safely handle finished status
@@ -91,15 +81,16 @@ class YTDLProgress:
                 except (ValueError, TypeError):
                     total_bytes = 0
                 
-                text = (
+                completed_text = (
                     f"✅ **Download Completed!**\n\n"
                     f"**📂 File:** {filename}\n"
                     f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
                 )
-                self.enqueue(text)
+                self.enqueue(self.msg.edit_text(completed_text, parse_mode=ParseMode.MARKDOWN))
                 
         except Exception as e:
-            self.enqueue(f"❌ Error in progress hook: `{str(e)}`")
+            # show error as plain text edit
+            self.enqueue(self.msg.edit_text(f"❌ Error in progress hook: `{str(e)}`"))
 
     async def cleanup(self):
         """Cleanup background task"""
