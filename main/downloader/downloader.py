@@ -151,8 +151,9 @@ async def yt_callback_handler(bot, query):
     )
 
     # Initialize live progress with YTDLProgress to edit the current message
-    progress = YTDLProgress(bot, query.message.chat.id, f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", query.message)
+    progress = YTDLProgress(bot, query.message.chat.id, ud_type=f"📥 **Downloading...**\n\n🎞 {title}\n📹 {resolution}", message_obj=query.message)
     progress.update_task = asyncio.create_task(progress.process_queue())
+
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
