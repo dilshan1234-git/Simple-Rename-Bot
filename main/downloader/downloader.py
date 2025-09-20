@@ -157,6 +157,9 @@ async def yt_callback_handler(bot, query):
         prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**", 
         edit_msg=query.message
     )
+    
+    # Start the progress updater
+    await progress.start_updater()
 
     ydl_opts = {
         'format': f"{format_id}+bestaudio[ext=m4a]/best",
@@ -179,13 +182,15 @@ async def yt_callback_handler(bot, query):
     try:
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
+        await progress.stop_updater()
         await query.message.edit_caption(
             caption=f"❌ **Error during download:** {str(e)}",
             parse_mode=enums.ParseMode.MARKDOWN
         )
         return
 
-    # Delete the download progress message
+    # Stop the progress updater and delete the download progress message
+    await progress.stop_updater()
     await query.message.delete()
 
     # Process video info
