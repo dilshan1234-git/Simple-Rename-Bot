@@ -146,7 +146,7 @@ async def yt_callback_handler(bot, query):
     # Remove buttons and update caption to show downloading started
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.edit_caption(
-        caption=f"📥 **Downloading Started...**\n\n🎞 {title}\n📹 {resolution}",
+        caption=f"📥 **Downloading Started...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
