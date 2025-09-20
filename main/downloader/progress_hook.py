@@ -72,7 +72,7 @@ class YTDLProgress:
                         total_bytes = data.get('total_bytes', 0)
                         text = (
                             f"✅ **Download Completed!**\n\n"
-                            f"**📂 File:** {filename}\n"
+                            f"**📂 File:** {filename}\n\n"
                             f"**💾 Total Size:** {humanbytes(int(total_bytes)) if total_bytes > 0 else 'Unknown'}"
                         )
                         await self._update_msg(text)
