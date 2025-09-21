@@ -1,4 +1,4 @@
-import time, os, json, asyncio
+import time, os, json, asyncio, requests
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, CAPTION, ADMIN
@@ -100,21 +100,38 @@ async def handle_album_download(bot, callback_query: CallbackQuery):
         os.makedirs(folder, exist_ok=True)
         
         total_images = post.mediacount
-        await callback_query.edit_message_text(f"📸 **Downloading images: 0/{total_images}**")
+        last_message = f"📸 **Downloading images: 0/{total_images}**"
+        await callback_query.edit_message_text(last_message)
         
         # Download and send images
+        successful_uploads = 0
         i = 1
+        
         for node in post.get_sidecar_nodes():
             try:
-                # Download image
+                # Create proper filename without double extension
                 file_path = os.path.join(folder, f"image_{i:03d}.jpg")
-                L.download_pic(
-                    filename=file_path,
-                    url=node.display_url,
-                    mtime=post.date_utc
-                )
                 
-                await callback_query.edit_message_text(f"📸 **Downloading images: {i}/{total_images}**")
+                # Download image using requests (more reliable than download_pic)
+                response = requests.get(node.display_url, stream=True, 
+                                      cookies=L.context._session.cookies)
+                response.raise_for_status()
+                
+                with open(file_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                # Update progress only if message content changes
+                new_message = f"📸 **Downloading images: {i}/{total_images}**"
+                if new_message != last_message:
+                    await callback_query.edit_message_text(new_message)
+                    last_message = new_message
+                
+                # Verify file exists and has content
+                if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
+                    print(f"❌ Failed to download image {i}: File not created or empty")
+                    i += 1
+                    continue
                 
                 # Get file size
                 file_size = os.path.getsize(file_path)
@@ -127,34 +144,46 @@ async def handle_album_download(bot, callback_query: CallbackQuery):
                 c_time = time.time()
                 sts = await callback_query.message.reply_text(f"📤 **Uploading image {i}/{total_images}**")
                 
-                await bot.send_photo(
-                    callback_query.message.chat.id,
-                    photo=file_path,
-                    caption=caption,
-                    progress=progress_message,
-                    progress_args=(f"📤 Uploading image {i}/{total_images}", sts, c_time)
-                )
+                try:
+                    await bot.send_photo(
+                        callback_query.message.chat.id,
+                        photo=file_path,
+                        caption=caption,
+                        progress=progress_message,
+                        progress_args=(f"📤 Uploading image {i}/{total_images}", sts, c_time)
+                    )
+                    successful_uploads += 1
+                    await sts.delete()
+                except Exception as upload_error:
+                    print(f"❌ Upload failed for image {i}: {upload_error}")
+                    await sts.edit_text(f"❌ **Upload failed for image {i}**")
                 
                 # Clean up individual image
                 try:
                     os.remove(file_path)
-                except:
-                    pass
+                except Exception as cleanup_error:
+                    print(f"⚠️ Failed to cleanup {file_path}: {cleanup_error}")
                 
                 i += 1
                 
             except Exception as e:
-                print(f"Failed to download/upload image {i}: {e}")
+                print(f"❌ Failed to download/upload image {i}: {e}")
+                i += 1
                 continue
         
         # Clean up folder
         try:
             os.rmdir(folder)
+        except Exception as cleanup_error:
+            print(f"⚠️ Failed to cleanup folder {folder}: {cleanup_error}")
+            
+        await callback_query.message.reply_text(f"✅ **Successfully sent {successful_uploads}/{total_images} images**")
+        
+        # Delete the original selection message
+        try:
+            await callback_query.message.delete()
         except:
             pass
-            
-        await callback_query.message.reply_text(f"✅ **Successfully sent {i-1}/{total_images} images**")
-        await callback_query.message.delete()
         
     except Exception as e:
         await callback_query.edit_message_text(f"❌ **Error:** {str(e)}")
@@ -182,47 +211,69 @@ async def handle_video_download(bot, callback_query: CallbackQuery):
         folder = f"{DOWNLOAD_LOCATION}/video_{user_id}_{int(time.time())}"
         os.makedirs(folder, exist_ok=True)
         
-        # yt-dlp options
+        # yt-dlp options with better error handling
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
             "outtmpl": os.path.join(folder, "%(title)s.%(ext)s"),
-            "cookies": "main/cookies.json",
+            "cookiefile": "main/cookies.json",  # Changed from "cookies" to "cookiefile"
             "merge_output_format": "mp4",
             "quiet": True,
-            "no_warnings": True
+            "no_warnings": True,
+            "retries": 3,
+            "fragment_retries": 3,
         }
         
         # Download video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            video_title = info.get('title', 'Instagram_Video')
-            
-            # Update message with file name
-            await callback_query.edit_message_text(f"📥 **Downloading:** {video_title}")
-            
-            # Download
-            ydl.download([url])
+            try:
+                info = ydl.extract_info(url, download=False)
+                video_title = info.get('title', 'Instagram_Video')
+                
+                # Clean title for filename
+                video_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                
+                # Update message with file name
+                await callback_query.edit_message_text(f"📥 **Downloading:** {video_title}")
+                
+                # Download
+                ydl.download([url])
+            except Exception as download_error:
+                await callback_query.edit_message_text(f"❌ **Download failed:** {str(download_error)}")
+                return
         
         # Get downloaded file
         downloaded_file = None
         for file in os.listdir(folder):
-            downloaded_file = os.path.join(folder, file)
-            break
+            if file.endswith(('.mp4', '.mkv', '.webm', '.avi')):
+                downloaded_file = os.path.join(folder, file)
+                break
         
-        if not downloaded_file:
-            await callback_query.edit_message_text("❌ **Download failed!**")
+        if not downloaded_file or not os.path.exists(downloaded_file):
+            await callback_query.edit_message_text("❌ **Download failed! No video file found.**")
             return
         
         # Get file info
         file_size = os.path.getsize(downloaded_file)
         filesize_str = humanbytes(file_size)
         
+        # Check file size limit (2GB for Telegram)
+        if file_size > 2 * 1024 * 1024 * 1024:  # 2GB
+            await callback_query.edit_message_text("❌ **File too large! Maximum size is 2GB.**")
+            # Clean up
+            try:
+                os.remove(downloaded_file)
+                os.rmdir(folder)
+            except:
+                pass
+            return
+        
         # Get video duration
         try:
             video_clip = VideoFileClip(downloaded_file)
             duration = int(video_clip.duration)
             video_clip.close()
-        except:
+        except Exception as duration_error:
+            print(f"⚠️ Failed to get duration: {duration_error}")
             duration = 0
         
         # Prepare caption
@@ -253,13 +304,13 @@ async def handle_video_download(bot, callback_query: CallbackQuery):
             try:
                 os.remove(downloaded_file)
                 os.rmdir(folder)
-            except:
-                pass
+            except Exception as cleanup_error:
+                print(f"⚠️ Failed to cleanup: {cleanup_error}")
                 
             await sts.delete()
             
-        except Exception as e:
-            await sts.edit_text(f"❌ **Upload failed:** {str(e)}")
+        except Exception as upload_error:
+            await sts.edit_text(f"❌ **Upload failed:** {str(upload_error)}")
     
     except Exception as e:
         await callback_query.edit_message_text(f"❌ **Error:** {str(e)}")
@@ -281,3 +332,6 @@ async def cleanup_states():
         
         for user_id in to_remove:
             del user_states[user_id]
+
+# Start cleanup task
+asyncio.create_task(cleanup_states())
