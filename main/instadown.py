@@ -6,6 +6,7 @@ from main.utils import progress_message, humanbytes
 import instaloader
 import yt_dlp
 from moviepy.editor import VideoFileClip
+import uuid
 
 # Initialize Instaloader
 L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False)
@@ -41,11 +42,18 @@ async def instagram_downloader(bot, msg):
     if "instagram.com" not in url:
         return await msg.reply_text("Please provide a valid Instagram URL")
     
-    # Create inline keyboard
+    # Generate a unique ID for this request
+    request_id = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
+    
+    # Store URL in user_states
+    user_id = msg.from_user.id
+    user_states[user_id] = {"url": url, "timestamp": time.time()}
+    
+    # Create inline keyboard with short callback data
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📸 Album", callback_data=f"album:{url}"),
-            InlineKeyboardButton("🎥 Video/Reel", callback_data=f"video:{url}")
+            InlineKeyboardButton("📸 Album", callback_data=f"album:{request_id}"),
+            InlineKeyboardButton("🎥 Video/Reel", callback_data=f"video:{request_id}")
         ]
     ])
     
@@ -53,11 +61,19 @@ async def instagram_downloader(bot, msg):
 
 @Client.on_callback_query(filters.regex(r"^album:"))
 async def handle_album_download(bot, callback_query: CallbackQuery):
-    url = callback_query.data.split(":", 1)[1]
+    request_id = callback_query.data.split(":", 1)[1]
     user_id = callback_query.from_user.id
     
-    # Store state with timestamp
-    user_states[user_id] = {"type": "album", "url": url, "timestamp": time.time()}
+    # Retrieve URL from user_states
+    if user_id not in user_states or "url" not in user_states[user_id]:
+        await callback_query.edit_message_text("❌ **Session expired. Please start again with /instadl**")
+        return
+    
+    url = user_states[user_id]["url"]
+    
+    # Update state with timestamp
+    user_states[user_id]["type"] = "album"
+    user_states[user_id]["timestamp"] = time.time()
     
     await callback_query.edit_message_text("🔄 **Preparing to download album images...**")
     
@@ -149,8 +165,15 @@ async def handle_album_download(bot, callback_query: CallbackQuery):
 
 @Client.on_callback_query(filters.regex(r"^video:"))
 async def handle_video_download(bot, callback_query: CallbackQuery):
-    url = callback_query.data.split(":", 1)[1]
+    request_id = callback_query.data.split(":", 1)[1]
     user_id = callback_query.from_user.id
+    
+    # Retrieve URL from user_states
+    if user_id not in user_states or "url" not in user_states[user_id]:
+        await callback_query.edit_message_text("❌ **Session expired. Please start again with /instadl**")
+        return
+    
+    url = user_states[user_id]["url"]
     
     await callback_query.edit_message_text("🔄 **Downloading your video/reel...**")
     
@@ -240,6 +263,10 @@ async def handle_video_download(bot, callback_query: CallbackQuery):
     
     except Exception as e:
         await callback_query.edit_message_text(f"❌ **Error:** {str(e)}")
+    
+    # Delete user state
+    if user_id in user_states:
+        del user_states[user_id]
 
 # Clean up old user states periodically
 async def cleanup_states():
