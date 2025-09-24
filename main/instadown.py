@@ -1,7 +1,6 @@
 import os
 import json
 import time
-import asyncio
 import instaloader
 import yt_dlp
 from pyrogram import Client, filters
@@ -12,7 +11,7 @@ from main.utils import progress_message, humanbytes
 # ----------------------
 # Paths & folders
 # ----------------------
-COOKIES_PATH = os.path.join("main", "downloader", "cookies.json")  # store cookies.json in git
+COOKIES_PATH = os.path.join("main", "downloader", "cookies.json")
 INSTA_FOLDER = os.path.join(DOWNLOAD_LOCATION, "insta")
 ALBUM_FOLDER = os.path.join(INSTA_FOLDER, "album")
 VIDEO_FOLDER = os.path.join(INSTA_FOLDER, "video")
@@ -26,7 +25,6 @@ INSTADL_STATE = {}  # chat_id -> dict { step, last_msgs: [msg_id,...], data: {..
 # Helper functions
 # ----------------------
 async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
-    """Send a message and track it for cleanup."""
     msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["last_msgs"].append(msg.id)
@@ -35,10 +33,8 @@ async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=
     return msg
 
 async def cleanup_old(bot, chat_id):
-    """Delete tracked messages for clean UI."""
     st = INSTADL_STATE.get(chat_id)
-    if not st: 
-        return
+    if not st: return
     for mid in st.get("last_msgs", []):
         try:
             await bot.delete_messages(chat_id, mid)
@@ -47,7 +43,6 @@ async def cleanup_old(bot, chat_id):
     st["last_msgs"] = []
 
 def load_cookies_for_instaloader(L):
-    """Load cookies.json into Instaloader."""
     if not os.path.exists(COOKIES_PATH):
         return False
     try:
@@ -61,7 +56,6 @@ def load_cookies_for_instaloader(L):
         return False
 
 def extract_shortcode(url: str):
-    """Parse shortcode from Instagram URL."""
     try:
         parts = url.split("/")
         for i, p in enumerate(parts):
@@ -74,6 +68,17 @@ def extract_shortcode(url: str):
         pass
     return None
 
+def get_ydl_opts(video_folder, cookies_path):
+    return {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": os.path.join(video_folder, "%(title)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "cookies": cookies_path if os.path.exists(cookies_path) else None,
+        "nocheckcertificate": True,
+        "quiet": True,
+        "ignoreerrors": True,
+    }
+
 # ----------------------
 # /instadl command
 # ----------------------
@@ -82,12 +87,10 @@ async def instadl_start(bot, msg):
     replied = msg.reply_to_message
     if not replied or not replied.text:
         return await msg.reply_text("Reply to an Instagram post URL with /instadl.")
-
     url = replied.text.strip().split()[0]
     shortcode = extract_shortcode(url)
     if not shortcode:
         return await msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
-
     chat_id = msg.chat.id
     INSTADL_STATE[chat_id] = {"step": "choose", "last_msgs": [], "data": {"url": url, "shortcode": shortcode}}
 
@@ -109,11 +112,8 @@ async def instadl_cb(bot, cq):
     chat_id = cq.message.chat.id
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["data"]["choice"] = choice
-
-    try:
-        await cq.message.delete()
-    except:
-        pass
+    try: await cq.message.delete()
+    except: pass
 
     if choice == "album":
         st["step"] = "downloading_album"
@@ -123,7 +123,7 @@ async def instadl_cb(bot, cq):
         await handle_video_download(bot, chat_id)
 
 # ----------------------
-# Album download flow
+# Album download flow (send images directly)
 # ----------------------
 async def handle_album_download(bot, chat_id):
     st = INSTADL_STATE[chat_id]
@@ -131,16 +131,12 @@ async def handle_album_download(bot, chat_id):
     shortcode = st["data"]["shortcode"]
 
     os.makedirs(ALBUM_FOLDER, exist_ok=True)
-    # clean old files
     for f in os.listdir(ALBUM_FOLDER):
-        try:
-            os.remove(os.path.join(ALBUM_FOLDER, f))
-        except:
-            pass
+        try: os.remove(os.path.join(ALBUM_FOLDER, f))
+        except: pass
 
-    msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
+    status_msg = await send_clean(bot, chat_id, "📥 Downloading images...")
 
-    # initialize instaloader
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
     load_cookies_for_instaloader(L)
 
@@ -148,12 +144,12 @@ async def handle_album_download(bot, chat_id):
         post = instaloader.Post.from_shortcode(L.context, shortcode)
         sidecar = list(post.get_sidecar_nodes())
         if not sidecar:
-            sidecar = [post]  # single image post
-        total = len(sidecar)
+            sidecar = [post]
     except Exception as e:
-        await msg.edit(f"Failed to fetch post: {e}")
+        await status_msg.edit(f"Failed to fetch post: {e}")
         return
 
+    total = len(sidecar)
     for i, node in enumerate(sidecar, 1):
         filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
         try:
@@ -167,25 +163,16 @@ async def handle_album_download(bot, chat_id):
             except:
                 pass
         try:
-            await msg.edit(f"📥 Downloading images... ({i}/{total})")
+            await status_msg.edit(f"📥 Downloading images... ({i}/{total})")
         except:
             pass
-
-        # send each image to chat
         try:
-            await bot.send_photo(chat_id, filename, caption=f"Image {i}/{total}")
+            await bot.send_photo(chat_id, filename)
         except:
             pass
 
-    # cleanup
     try:
-        for f in os.listdir(ALBUM_FOLDER):
-            os.remove(os.path.join(ALBUM_FOLDER, f))
-    except:
-        pass
-
-    try:
-        await msg.delete()
+        await status_msg.delete()
     except:
         pass
     INSTADL_STATE.pop(chat_id, None)
@@ -204,18 +191,18 @@ async def handle_video_download(bot, chat_id):
 
     status_msg = await send_clean(bot, chat_id, "📥 Preparing to download video...")
 
-    ydl_opts = {
-        "format": "bestvideo+bestaudio/best",
-        "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
-        "merge_output_format": "mp4",
-        "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
-    }
-
-    loop = asyncio.get_event_loop()
-    def run_ydl():
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
-    await loop.run_in_executor(None, run_ydl)
+    for attempt in range(3):
+        ydl_opts = get_ydl_opts(VIDEO_FOLDER, COOKIES_PATH)
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            break
+        except Exception as e:
+            await status_msg.edit(f"Download failed, retry {attempt+1}/3...")
+            time.sleep(5)
+    else:
+        await status_msg.edit("❌ Failed to download video after 3 attempts.")
+        return
 
     files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
     if not files:
@@ -250,13 +237,9 @@ async def handle_video_download(bot, chat_id):
     except Exception as e:
         await status_msg.edit(f"Upload failed: {e}")
     finally:
-        try:
-            os.remove(file_path)
-        except:
-            pass
+        try: os.remove(file_path)
+        except: pass
 
-    try:
-        await status_msg.delete()
-    except:
-        pass
+    try: await status_msg.delete()
+    except: pass
     INSTADL_STATE.pop(chat_id, None)
