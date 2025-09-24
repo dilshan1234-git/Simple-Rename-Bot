@@ -65,9 +65,31 @@ async def save_cookie_cmd(bot, msg):
         return await msg.reply_text("⚠️ Reply to your Netscape HTTP Cookie content with /save_cookie command.")
 
     cookie_text = replied.text.strip()
+    lines = cookie_text.splitlines()
+    processed_lines = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#"):
+            processed_lines.append(line)
+            continue
+        # Split on any whitespace (including \xa0)
+        parts = line.split()
+        if len(parts) >= 7:
+            # Fields: domain, tailmatch, path, secure, expires, name, value (value may have spaces)
+            domain, tailmatch, path, secure, expires, name = parts[:6]
+            value = ' '.join(parts[6:])
+            processed_line = '\t'.join([domain, tailmatch, path, secure, expires, name, value])
+            processed_lines.append(processed_line)
+
+    if not processed_lines:
+        return await msg.reply_text("⚠️ No valid cookie entries found in the provided text.")
+
     try:
         with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-            f.write(cookie_text)
+            for pline in processed_lines:
+                f.write(pline + "\n")
         await msg.reply_text("✅ Instagram cookie saved successfully!")
     except Exception as e:
         await msg.reply_text(f"❌ Failed to save cookie: {e}")
