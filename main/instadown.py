@@ -74,10 +74,9 @@ async def save_cookie_cmd(bot, msg):
         if line.startswith("#"):
             processed_lines.append(line)
             continue
-        # Split on any whitespace (including \xa0)
+        # Split on whitespace
         parts = line.split()
         if len(parts) >= 7:
-            # Fields: domain, tailmatch, path, secure, expires, name, value (value may have spaces)
             domain, tailmatch, path, secure, expires, name = parts[:6]
             value = ' '.join(parts[6:])
             processed_line = '\t'.join([domain, tailmatch, path, secure, expires, name, value])
@@ -103,17 +102,22 @@ def load_cookies_for_instaloader(L):
         print("[INSTADL] Cookie file not found!")
         return False
     try:
-        L.load_session_from_file("dummy")  # avoid login
-        L.context._session.cookies.clear()  # clear default
+        L.load_session_from_file("dummy")
+        L.context._session.cookies.clear()
         with open(COOKIE_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
-                if line.startswith("#") or not line:
+                if not line or line.startswith("#"):
                     continue
                 parts = line.split("\t")
-                if len(parts) >= 7:
-                    domain, _, path, secure, _, name, value = parts[:7]
-                    L.context._session.cookies.set(name, value, domain=domain, path=path)
+                if len(parts) != 7:
+                    continue
+                domain, tailmatch, path, secure, expires, name, value = parts
+                secure = secure.upper() == "TRUE"
+                value = value.strip('"')
+                L.context._session.cookies.set(
+                    name, value, domain=domain, path=path, secure=secure
+                )
         print("[INSTADL] Cookies loaded successfully ✅")
         return True
     except Exception as e:
@@ -121,7 +125,6 @@ def load_cookies_for_instaloader(L):
         return False
 
 def get_cookiefile_for_yt_dlp():
-    """Return cookiefile path for yt-dlp if exists, else None"""
     return COOKIE_FILE if os.path.exists(COOKIE_FILE) else None
 
 # ----------------------
@@ -160,10 +163,8 @@ async def instadl_cb(bot, cq):
     st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["data"]["choice"] = choice
 
-    try:
-        await cq.message.delete()
-    except:
-        pass
+    try: await cq.message.delete()
+    except: pass
 
     if choice == "album":
         st["step"] = "downloading_album"
@@ -173,11 +174,10 @@ async def instadl_cb(bot, cq):
         await handle_video_download(bot, chat_id)
 
 # ----------------------
-# Album download flow
+# Album download
 # ----------------------
 async def handle_album_download(bot, chat_id):
     st = INSTADL_STATE[chat_id]
-    url = st["data"]["url"]
     shortcode = st["data"]["shortcode"]
 
     os.makedirs(ALBUM_FOLDER, exist_ok=True)
@@ -194,9 +194,7 @@ async def handle_album_download(bot, chat_id):
 
     try:
         post = instaloader.Post.from_shortcode(L.context, shortcode)
-        sidecar = list(post.get_sidecar_nodes())
-        if not sidecar:
-            sidecar = [post]
+        sidecar = list(post.get_sidecar_nodes()) or [post]
         total = len(sidecar)
     except Exception as e:
         await msg.edit(f"❌ Failed to fetch post: {e}")
@@ -204,35 +202,26 @@ async def handle_album_download(bot, chat_id):
 
     for i, node in enumerate(sidecar, 1):
         filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
-        try:
-            L.download_pic(filename, node.display_url, mtime=post.date_utc)
+        try: L.download_pic(filename, node.display_url, mtime=post.date_utc)
         except:
             try:
                 import requests
                 r = requests.get(node.display_url, timeout=30)
-                with open(filename, "wb") as f:
-                    f.write(r.content)
-            except:
-                pass
-        try:
-            await msg.edit(f"📥 Downloading images... ({i}/{total})")
-        except:
-            pass
-
+                with open(filename, "wb") as f: f.write(r.content)
+            except: pass
+        try: await msg.edit(f"📥 Downloading images... ({i}/{total})")
+        except: pass
         try:
             await bot.send_photo(chat_id, photo=filename, caption=f"Image {i}/{total}")
             os.remove(filename)
-        except:
-            pass
+        except: pass
 
-    try:
-        await msg.delete()
-    except:
-        pass
+    try: await msg.delete()
+    except: pass
     INSTADL_STATE.pop(chat_id, None)
 
 # ----------------------
-# Video/reel download flow
+# Video/reel download
 # ----------------------
 async def handle_video_download(bot, chat_id):
     st = INSTADL_STATE[chat_id]
@@ -267,8 +256,7 @@ async def handle_video_download(bot, chat_id):
                 asyncio.get_event_loop().create_task(status_msg.edit(text))
             elif d.get("status") == "finished":
                 asyncio.get_event_loop().create_task(status_msg.edit("Merging/processing video..."))
-        except:
-            pass
+        except: pass
 
     ydl_opts["progress_hooks"] = [ytdl_hook]
 
@@ -315,8 +303,6 @@ async def handle_video_download(bot, chat_id):
         try: os.remove(file_path)
         except: pass
 
-    try:
-        await status_msg.delete()
-    except:
-        pass
+    try: await status_msg.delete()
+    except: pass
     INSTADL_STATE.pop(chat_id, None)
