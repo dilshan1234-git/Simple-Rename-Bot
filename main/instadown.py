@@ -11,17 +11,54 @@ import uuid
 # Initialize Instaloader
 L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False)
 
+# Convert JSON cookies to Netscape format
+def json_to_netscape_cookies(json_file, netscape_file):
+    """Convert JSON cookies to Netscape format for yt-dlp"""
+    try:
+        with open(json_file, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        
+        with open(netscape_file, "w", encoding="utf-8") as f:
+            f.write("# Netscape HTTP Cookie File\n")
+            f.write("# Generated from JSON cookies\n")
+            
+            for cookie in cookies:
+                # Netscape format: domain, flag, path, secure, expiration, name, value
+                domain = cookie.get("domain", ".instagram.com")
+                flag = "TRUE" if domain.startswith(".") else "FALSE"
+                path = cookie.get("path", "/")
+                secure = "TRUE" if cookie.get("secure", False) else "FALSE"
+                expiration = str(int(cookie.get("expirationDate", time.time() + 86400)))
+                name = cookie.get("name", "")
+                value = cookie.get("value", "")
+                
+                f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
+        
+        return True
+    except Exception as e:
+        print(f"❌ Failed to convert cookies: {e}")
+        return False
+
 # Load cookies on startup
 def load_cookies():
     try:
+        # Load JSON cookies for Instaloader
         with open("main/cookies.json", "r", encoding="utf-8") as f:
             cookies = json.load(f)
         
         # Apply cookies to Instaloader session
         for cookie in cookies:
             L.context._session.cookies.set(cookie["name"], cookie["value"])
-        print("✅ Cookies loaded successfully")
-        return True
+        
+        # Convert JSON cookies to Netscape format for yt-dlp
+        netscape_file = "main/cookies_netscape.txt"
+        if json_to_netscape_cookies("main/cookies.json", netscape_file):
+            print("✅ Cookies loaded and converted successfully")
+            return True
+        else:
+            print("⚠️ Cookies loaded for Instaloader but conversion failed")
+            return False
+            
     except Exception as e:
         print(f"❌ Failed to load cookies: {e}")
         return False
@@ -211,17 +248,28 @@ async def handle_video_download(bot, callback_query: CallbackQuery):
         folder = f"{DOWNLOAD_LOCATION}/video_{user_id}_{int(time.time())}"
         os.makedirs(folder, exist_ok=True)
         
-        # yt-dlp options with better error handling
+        # Check if Netscape cookies file exists
+        netscape_cookies = "main/cookies_netscape.txt"
+        if not os.path.exists(netscape_cookies):
+            # Try to recreate it
+            if not json_to_netscape_cookies("main/cookies.json", netscape_cookies):
+                print("⚠️ No cookies available for yt-dlp")
+                netscape_cookies = None
+        
+        # yt-dlp options with proper cookie handling
         ydl_opts = {
             "format": "bestvideo+bestaudio/best",
             "outtmpl": os.path.join(folder, "%(title)s.%(ext)s"),
-            "cookiefile": "main/cookies.json",  # Changed from "cookies" to "cookiefile"
             "merge_output_format": "mp4",
             "quiet": True,
             "no_warnings": True,
             "retries": 3,
             "fragment_retries": 3,
         }
+        
+        # Add cookies only if file exists
+        if netscape_cookies and os.path.exists(netscape_cookies):
+            ydl_opts["cookiefile"] = netscape_cookies
         
         # Download video
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
