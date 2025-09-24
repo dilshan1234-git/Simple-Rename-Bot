@@ -1,385 +1,262 @@
-import time, os, json, asyncio, requests
-from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import DOWNLOAD_LOCATION, CAPTION, ADMIN
-from main.utils import progress_message, humanbytes
+import os
+import json
+import time
+import asyncio
 import instaloader
 import yt_dlp
-from moviepy.editor import VideoFileClip
-import uuid
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from config import DOWNLOAD_LOCATION, ADMIN
+from main.utils import progress_message, humanbytes
 
-# Initialize Instaloader
-L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False)
+# ----------------------
+# Paths & folders
+# ----------------------
+COOKIES_PATH = os.path.join("main", "downloader", "cookies.json")  # store cookies.json in git
+INSTA_FOLDER = os.path.join(DOWNLOAD_LOCATION, "insta")
+ALBUM_FOLDER = os.path.join(INSTA_FOLDER, "album")
+VIDEO_FOLDER = os.path.join(INSTA_FOLDER, "video")
 
-# Convert JSON cookies to Netscape format
-def json_to_netscape_cookies(json_file, netscape_file):
-    """Convert JSON cookies to Netscape format for yt-dlp"""
-    try:
-        with open(json_file, "r", encoding="utf-8") as f:
-            cookies = json.load(f)
-        
-        with open(netscape_file, "w", encoding="utf-8") as f:
-            f.write("# Netscape HTTP Cookie File\n")
-            f.write("# Generated from JSON cookies\n")
-            
-            for cookie in cookies:
-                # Netscape format: domain, flag, path, secure, expiration, name, value
-                domain = cookie.get("domain", ".instagram.com")
-                flag = "TRUE" if domain.startswith(".") else "FALSE"
-                path = cookie.get("path", "/")
-                secure = "TRUE" if cookie.get("secure", False) else "FALSE"
-                expiration = str(int(cookie.get("expirationDate", time.time() + 86400)))
-                name = cookie.get("name", "")
-                value = cookie.get("value", "")
-                
-                f.write(f"{domain}\t{flag}\t{path}\t{secure}\t{expiration}\t{name}\t{value}\n")
-        
-        return True
-    except Exception as e:
-        print(f"❌ Failed to convert cookies: {e}")
-        return False
+# ----------------------
+# In-memory state
+# ----------------------
+INSTADL_STATE = {}  # chat_id -> dict { step, last_msgs: [msg_id,...], data: {...} }
 
-# Load cookies on startup
-def load_cookies():
-    try:
-        # Load JSON cookies for Instaloader
-        with open("main/cookies.json", "r", encoding="utf-8") as f:
-            cookies = json.load(f)
-        
-        # Apply cookies to Instaloader session
-        for cookie in cookies:
-            L.context._session.cookies.set(cookie["name"], cookie["value"])
-        
-        # Convert JSON cookies to Netscape format for yt-dlp
-        netscape_file = "main/cookies_netscape.txt"
-        if json_to_netscape_cookies("main/cookies.json", netscape_file):
-            print("✅ Cookies loaded and converted successfully")
-            return True
-        else:
-            print("⚠️ Cookies loaded for Instaloader but conversion failed")
-            return False
-            
-    except Exception as e:
-        print(f"❌ Failed to load cookies: {e}")
-        return False
+# ----------------------
+# Helper functions
+# ----------------------
+async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
+    """Send a message and track it for cleanup."""
+    msg = await bot.send_message(chat_id, text, reply_markup=reply_markup, reply_to_message_id=reply_to_message_id)
+    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
+    st["last_msgs"].append(msg.id)
+    if len(st["last_msgs"]) > 8:
+        st["last_msgs"].pop(0)
+    return msg
 
-# Load cookies when module imports
-load_cookies()
-
-# Store user states
-user_states = {}
-
-@Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
-async def instagram_downloader(bot, msg):
-    reply = msg.reply_to_message
-    if not reply or not reply.text:
-        return await msg.reply_text("Please reply to an Instagram URL with /instadl command")
-    
-    url = reply.text.strip()
-    if "instagram.com" not in url:
-        return await msg.reply_text("Please provide a valid Instagram URL")
-    
-    # Generate a unique ID for this request
-    request_id = str(uuid.uuid4())[:8]  # Use first 8 characters of UUID
-    
-    # Store URL in user_states
-    user_id = msg.from_user.id
-    user_states[user_id] = {"url": url, "timestamp": time.time()}
-    
-    # Create inline keyboard with short callback data
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📸 Album", callback_data=f"album:{request_id}"),
-            InlineKeyboardButton("🎥 Video/Reel", callback_data=f"video:{request_id}")
-        ]
-    ])
-    
-    await msg.reply_text("📱 **Select Download Method:**", reply_markup=keyboard)
-
-@Client.on_callback_query(filters.regex(r"^album:"))
-async def handle_album_download(bot, callback_query: CallbackQuery):
-    request_id = callback_query.data.split(":", 1)[1]
-    user_id = callback_query.from_user.id
-    
-    # Retrieve URL from user_states
-    if user_id not in user_states or "url" not in user_states[user_id]:
-        await callback_query.edit_message_text("❌ **Session expired. Please start again with /instadl**")
+async def cleanup_old(bot, chat_id):
+    """Delete tracked messages for clean UI."""
+    st = INSTADL_STATE.get(chat_id)
+    if not st: 
         return
-    
-    url = user_states[user_id]["url"]
-    
-    # Update state with timestamp
-    user_states[user_id]["type"] = "album"
-    user_states[user_id]["timestamp"] = time.time()
-    
-    await callback_query.edit_message_text("🔄 **Preparing to download album images...**")
-    
-    try:
-        # Extract shortcode from URL
-        if "/p/" in url:
-            shortcode = url.split("/p/")[1].split("/")[0]
-        elif "/reel/" in url:
-            shortcode = url.split("/reel/")[1].split("/")[0]
-        else:
-            await callback_query.edit_message_text("❌ **Invalid Instagram URL**")
-            return
-        
-        # Fetch post
-        post = instaloader.Post.from_shortcode(L.context, shortcode)
-        
-        # Check if it's an album
-        if not post.mediacount > 1:
-            await callback_query.edit_message_text("❌ **This is not an album. Use Video/Reel option instead.**")
-            return
-        
-        # Create folder
-        folder = f"{DOWNLOAD_LOCATION}/album_{user_id}_{int(time.time())}"
-        os.makedirs(folder, exist_ok=True)
-        
-        total_images = post.mediacount
-        last_message = f"📸 **Downloading images: 0/{total_images}**"
-        await callback_query.edit_message_text(last_message)
-        
-        # Download and send images
-        successful_uploads = 0
-        i = 1
-        
-        for node in post.get_sidecar_nodes():
-            try:
-                # Create proper filename without double extension
-                file_path = os.path.join(folder, f"image_{i:03d}.jpg")
-                
-                # Download image using requests (more reliable than download_pic)
-                response = requests.get(node.display_url, stream=True, 
-                                      cookies=L.context._session.cookies)
-                response.raise_for_status()
-                
-                with open(file_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                # Update progress only if message content changes
-                new_message = f"📸 **Downloading images: {i}/{total_images}**"
-                if new_message != last_message:
-                    await callback_query.edit_message_text(new_message)
-                    last_message = new_message
-                
-                # Verify file exists and has content
-                if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
-                    print(f"❌ Failed to download image {i}: File not created or empty")
-                    i += 1
-                    continue
-                
-                # Get file size
-                file_size = os.path.getsize(file_path)
-                file_size_str = humanbytes(file_size)
-                
-                # Prepare caption
-                caption = f"📸 **Image {i}/{total_images}**\n💽 Size: {file_size_str}"
-                
-                # Send photo in highest quality
-                c_time = time.time()
-                sts = await callback_query.message.reply_text(f"📤 **Uploading image {i}/{total_images}**")
-                
-                try:
-                    await bot.send_photo(
-                        callback_query.message.chat.id,
-                        photo=file_path,
-                        caption=caption,
-                        progress=progress_message,
-                        progress_args=(f"📤 Uploading image {i}/{total_images}", sts, c_time)
-                    )
-                    successful_uploads += 1
-                    await sts.delete()
-                except Exception as upload_error:
-                    print(f"❌ Upload failed for image {i}: {upload_error}")
-                    await sts.edit_text(f"❌ **Upload failed for image {i}**")
-                
-                # Clean up individual image
-                try:
-                    os.remove(file_path)
-                except Exception as cleanup_error:
-                    print(f"⚠️ Failed to cleanup {file_path}: {cleanup_error}")
-                
-                i += 1
-                
-            except Exception as e:
-                print(f"❌ Failed to download/upload image {i}: {e}")
-                i += 1
-                continue
-        
-        # Clean up folder
+    for mid in st.get("last_msgs", []):
         try:
-            os.rmdir(folder)
-        except Exception as cleanup_error:
-            print(f"⚠️ Failed to cleanup folder {folder}: {cleanup_error}")
-            
-        await callback_query.message.reply_text(f"✅ **Successfully sent {successful_uploads}/{total_images} images**")
-        
-        # Delete the original selection message
-        try:
-            await callback_query.message.delete()
+            await bot.delete_messages(chat_id, mid)
         except:
             pass
-        
-    except Exception as e:
-        await callback_query.edit_message_text(f"❌ **Error:** {str(e)}")
-    
-    # Delete user state
-    if user_id in user_states:
-        del user_states[user_id]
+    st["last_msgs"] = []
 
-@Client.on_callback_query(filters.regex(r"^video:"))
-async def handle_video_download(bot, callback_query: CallbackQuery):
-    request_id = callback_query.data.split(":", 1)[1]
-    user_id = callback_query.from_user.id
-    
-    # Retrieve URL from user_states
-    if user_id not in user_states or "url" not in user_states[user_id]:
-        await callback_query.edit_message_text("❌ **Session expired. Please start again with /instadl**")
-        return
-    
-    url = user_states[user_id]["url"]
-    
-    await callback_query.edit_message_text("🔄 **Downloading your video/reel...**")
-    
+def load_cookies_for_instaloader(L):
+    """Load cookies.json into Instaloader."""
+    if not os.path.exists(COOKIES_PATH):
+        return False
     try:
-        # Create folder
-        folder = f"{DOWNLOAD_LOCATION}/video_{user_id}_{int(time.time())}"
-        os.makedirs(folder, exist_ok=True)
-        
-        # Check if Netscape cookies file exists
-        netscape_cookies = "main/cookies_netscape.txt"
-        if not os.path.exists(netscape_cookies):
-            # Try to recreate it
-            if not json_to_netscape_cookies("main/cookies.json", netscape_cookies):
-                print("⚠️ No cookies available for yt-dlp")
-                netscape_cookies = None
-        
-        # yt-dlp options with proper cookie handling
-        ydl_opts = {
-            "format": "bestvideo+bestaudio/best",
-            "outtmpl": os.path.join(folder, "%(title)s.%(ext)s"),
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "retries": 3,
-            "fragment_retries": 3,
-        }
-        
-        # Add cookies only if file exists
-        if netscape_cookies and os.path.exists(netscape_cookies):
-            ydl_opts["cookiefile"] = netscape_cookies
-        
-        # Download video
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        with open(COOKIES_PATH, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        for cookie in cookies:
+            L.context._session.cookies.set(cookie.get("name"), cookie.get("value"))
+        return True
+    except Exception as e:
+        print("Failed loading cookies:", e)
+        return False
+
+def extract_shortcode(url: str):
+    """Parse shortcode from Instagram URL."""
+    try:
+        parts = url.split("/")
+        for i, p in enumerate(parts):
+            if p in ("p", "reel", "tv") and i + 1 < len(parts):
+                return parts[i + 1].split("?")[0]
+        segs = [s for s in parts if s]
+        if segs:
+            return segs[-1].split("?")[0]
+    except:
+        pass
+    return None
+
+# ----------------------
+# /instadl command
+# ----------------------
+@Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
+async def instadl_start(bot, msg):
+    replied = msg.reply_to_message
+    if not replied or not replied.text:
+        return await msg.reply_text("Reply to an Instagram post URL with /instadl.")
+
+    url = replied.text.strip().split()[0]
+    shortcode = extract_shortcode(url)
+    if not shortcode:
+        return await msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
+
+    chat_id = msg.chat.id
+    INSTADL_STATE[chat_id] = {"step": "choose", "last_msgs": [], "data": {"url": url, "shortcode": shortcode}}
+
+    kb = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("🖼 Album (images)", callback_data="insta_album"),
+             InlineKeyboardButton("🎞 Video / Reel", callback_data="insta_video")]
+        ]
+    )
+    await cleanup_old(bot, chat_id)
+    await send_clean(bot, chat_id, "Select your download method:", reply_markup=kb, reply_to_message_id=msg.id)
+
+# ----------------------
+# Callback handler
+# ----------------------
+@Client.on_callback_query(filters.user(ADMIN) & filters.regex(r"^insta_(album|video)$"))
+async def instadl_cb(bot, cq):
+    choice = cq.data.split("_")[1]
+    chat_id = cq.message.chat.id
+    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
+    st["data"]["choice"] = choice
+
+    try:
+        await cq.message.delete()
+    except:
+        pass
+
+    if choice == "album":
+        st["step"] = "downloading_album"
+        await handle_album_download(bot, chat_id)
+    else:
+        st["step"] = "downloading_video"
+        await handle_video_download(bot, chat_id)
+
+# ----------------------
+# Album download flow
+# ----------------------
+async def handle_album_download(bot, chat_id):
+    st = INSTADL_STATE[chat_id]
+    url = st["data"]["url"]
+    shortcode = st["data"]["shortcode"]
+
+    os.makedirs(ALBUM_FOLDER, exist_ok=True)
+    # clean old files
+    for f in os.listdir(ALBUM_FOLDER):
+        try:
+            os.remove(os.path.join(ALBUM_FOLDER, f))
+        except:
+            pass
+
+    msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
+
+    # initialize instaloader
+    L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
+    load_cookies_for_instaloader(L)
+
+    try:
+        post = instaloader.Post.from_shortcode(L.context, shortcode)
+        sidecar = list(post.get_sidecar_nodes())
+        if not sidecar:
+            sidecar = [post]  # single image post
+        total = len(sidecar)
+    except Exception as e:
+        await msg.edit(f"Failed to fetch post: {e}")
+        return
+
+    for i, node in enumerate(sidecar, 1):
+        filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
+        try:
+            L.download_pic(filename, node.display_url, mtime=post.date_utc)
+        except:
             try:
-                info = ydl.extract_info(url, download=False)
-                video_title = info.get('title', 'Instagram_Video')
-                
-                # Clean title for filename
-                video_title = "".join(c for c in video_title if c.isalnum() or c in (' ', '-', '_')).rstrip()
-                
-                # Update message with file name
-                await callback_query.edit_message_text(f"📥 **Downloading:** {video_title}")
-                
-                # Download
-                ydl.download([url])
-            except Exception as download_error:
-                await callback_query.edit_message_text(f"❌ **Download failed:** {str(download_error)}")
-                return
-        
-        # Get downloaded file
-        downloaded_file = None
-        for file in os.listdir(folder):
-            if file.endswith(('.mp4', '.mkv', '.webm', '.avi')):
-                downloaded_file = os.path.join(folder, file)
-                break
-        
-        if not downloaded_file or not os.path.exists(downloaded_file):
-            await callback_query.edit_message_text("❌ **Download failed! No video file found.**")
-            return
-        
-        # Get file info
-        file_size = os.path.getsize(downloaded_file)
-        filesize_str = humanbytes(file_size)
-        
-        # Check file size limit (2GB for Telegram)
-        if file_size > 2 * 1024 * 1024 * 1024:  # 2GB
-            await callback_query.edit_message_text("❌ **File too large! Maximum size is 2GB.**")
-            # Clean up
-            try:
-                os.remove(downloaded_file)
-                os.rmdir(folder)
+                import requests
+                r = requests.get(node.display_url, timeout=30)
+                with open(filename, "wb") as f:
+                    f.write(r.content)
             except:
                 pass
-            return
-        
-        # Get video duration
         try:
-            video_clip = VideoFileClip(downloaded_file)
-            duration = int(video_clip.duration)
-            video_clip.close()
-        except Exception as duration_error:
-            print(f"⚠️ Failed to get duration: {duration_error}")
-            duration = 0
-        
-        # Prepare caption
-        if CAPTION:
-            try:
-                cap = CAPTION.format(file_name=video_title, file_size=filesize_str, duration=duration)
-            except:
-                cap = f"📹 **{video_title}**\n\n💽 Size: {filesize_str}\n🕒 Duration: {duration} seconds"
-        else:
-            cap = f"📹 **{video_title}**\n\n💽 Size: {filesize_str}\n🕒 Duration: {duration} seconds"
-        
-        # Update message for upload
-        sts = await callback_query.edit_message_text(f"📤 **Uploading:** {video_title}")
+            await msg.edit(f"📥 Downloading images... ({i}/{total})")
+        except:
+            pass
+
+        # send each image to chat
+        try:
+            await bot.send_photo(chat_id, filename, caption=f"Image {i}/{total}")
+        except:
+            pass
+
+    # cleanup
+    try:
+        for f in os.listdir(ALBUM_FOLDER):
+            os.remove(os.path.join(ALBUM_FOLDER, f))
+    except:
+        pass
+
+    try:
+        await msg.delete()
+    except:
+        pass
+    INSTADL_STATE.pop(chat_id, None)
+
+# ----------------------
+# Video/reel download flow
+# ----------------------
+async def handle_video_download(bot, chat_id):
+    st = INSTADL_STATE[chat_id]
+    url = st["data"]["url"]
+
+    os.makedirs(VIDEO_FOLDER, exist_ok=True)
+    for f in os.listdir(VIDEO_FOLDER):
+        try: os.remove(os.path.join(VIDEO_FOLDER, f))
+        except: pass
+
+    status_msg = await send_clean(bot, chat_id, "📥 Preparing to download video...")
+
+    ydl_opts = {
+        "format": "bestvideo+bestaudio/best",
+        "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
+        "merge_output_format": "mp4",
+        "cookies": COOKIES_PATH if os.path.exists(COOKIES_PATH) else None,
+    }
+
+    loop = asyncio.get_event_loop()
+    def run_ydl():
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+    await loop.run_in_executor(None, run_ydl)
+
+    files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
+    if not files:
+        await status_msg.edit("Downloaded file not found.")
+        return
+
+    file_path = os.path.join(VIDEO_FOLDER, files[0])
+    file_name = files[0]
+
+    duration = None
+    try:
+        from moviepy.editor import VideoFileClip
+        clip = VideoFileClip(file_path)
+        duration = int(clip.duration)
+        clip.close()
+    except:
+        pass
+
+    filesize = humanbytes(os.path.getsize(file_path))
+    cap = f"{file_name}\n\n💽 Size: {filesize}\n🕒 Duration: {duration or 'Unknown'} seconds"
+
+    try:
+        await status_msg.edit("🚀 Uploading video...")
         c_time = time.time()
-        
-        # Upload video
-        try:
-            await bot.send_video(
-                callback_query.message.chat.id,
-                video=downloaded_file,
-                caption=cap,
-                duration=duration,
-                progress=progress_message,
-                progress_args=(f"📤 Uploading: {video_title}", sts, c_time)
-            )
-            
-            # Clean up
-            try:
-                os.remove(downloaded_file)
-                os.rmdir(folder)
-            except Exception as cleanup_error:
-                print(f"⚠️ Failed to cleanup: {cleanup_error}")
-                
-            await sts.delete()
-            
-        except Exception as upload_error:
-            await sts.edit_text(f"❌ **Upload failed:** {str(upload_error)}")
-    
+        await bot.send_video(
+            chat_id,
+            video=file_path,
+            caption=cap,
+            progress=progress_message,
+            progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time)
+        )
     except Exception as e:
-        await callback_query.edit_message_text(f"❌ **Error:** {str(e)}")
-    
-    # Delete user state
-    if user_id in user_states:
-        del user_states[user_id]
+        await status_msg.edit(f"Upload failed: {e}")
+    finally:
+        try:
+            os.remove(file_path)
+        except:
+            pass
 
-# Clean up old user states periodically
-async def cleanup_states():
-    while True:
-        await asyncio.sleep(300)  # Clean every 5 minutes
-        current_time = time.time()
-        to_remove = []
-        
-        for user_id, state in user_states.items():
-            if current_time - state.get("timestamp", current_time) > 300:  # 5 minutes
-                to_remove.append(user_id)
-        
-        for user_id in to_remove:
-            del user_states[user_id]
-
-# Start cleanup task
-asyncio.create_task(cleanup_states())
+    try:
+        await status_msg.delete()
+    except:
+        pass
+    INSTADL_STATE.pop(chat_id, None)
