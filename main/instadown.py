@@ -1,9 +1,10 @@
 import os
 import time
+import json
 import instaloader
 import yt_dlp
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ForceReply
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
@@ -13,7 +14,44 @@ from main.utils import progress_message, humanbytes
 INSTA_FOLDER = os.path.join(DOWNLOAD_LOCATION, "insta")
 ALBUM_FOLDER = os.path.join(INSTA_FOLDER, "album")
 VIDEO_FOLDER = os.path.join(INSTA_FOLDER, "video")
-COOKIE_FILE = os.path.join("main", "downloader", "insta_cookies.txt")  # saved Netscape cookies
+DOWNLOAD_FOLDER = VIDEO_FOLDER  # For yt-dlp downloads
+
+# ----------------------
+# Google Colab style cookie setup
+# ----------------------
+COOKIE_JSON = "/content/cookies.json"  # JSON exported from browser
+COOKIE_FILE_TXT = "/content/cookies.txt"
+os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
+os.makedirs(ALBUM_FOLDER, exist_ok=True)
+
+def convert_json_to_netscape(json_file, output_file):
+    with open(json_file, "r", encoding="utf-8-sig") as f:  # handles BOM
+        cookies = json.load(f)
+
+    lines = [
+        "# Netscape HTTP Cookie File",
+        "# This file was generated automatically from JSON cookies",
+        "# https://curl.se/docs/http-cookies.html\n"
+    ]
+
+    for c in cookies:
+        domain = c.get("domain", ".instagram.com")
+        tailmatch = "TRUE" if domain.startswith(".") else "FALSE"
+        path = c.get("path", "/")
+        secure = "TRUE" if c.get("secure", False) else "FALSE"
+        expires = str(c.get("expirationDate", 0) or 0)
+        name = c.get("name")
+        value = c.get("value")
+        if name and value:
+            value = value.replace("\n", "")
+            line = "\t".join([domain, tailmatch, path, secure, expires, name, value])
+            lines.append(line)
+
+    with open(output_file, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"✅ Converted JSON cookies to Netscape format: {output_file}")
+
+convert_json_to_netscape(COOKIE_JSON, COOKIE_FILE_TXT)
 
 # ----------------------
 # In-memory state
@@ -54,86 +92,6 @@ def extract_shortcode(url: str):
     except:
         pass
     return None
-
-# ----------------------
-# /save_cookie command
-# ----------------------
-@Client.on_message(filters.private & filters.command("save_cookie") & filters.user(ADMIN))
-async def save_cookie_cmd(bot, msg):
-    replied = msg.reply_to_message
-    if not replied or not replied.text:
-        return await msg.reply_text("⚠️ Reply to your Netscape HTTP Cookie content with /save_cookie command.")
-
-    cookie_text = replied.text.strip()
-    lines = cookie_text.splitlines()
-    processed_lines = []
-
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        # Keep comment lines as-is
-        if line.startswith("#"):
-            processed_lines.append(line)
-            continue
-        # Replace non-breaking spaces with normal spaces
-        line = line.replace("\xa0", " ")
-        # Split on any whitespace
-        parts = line.split()
-        if len(parts) >= 7:
-            domain, tailmatch, path, secure, expires, name = parts[:6]
-            value = " ".join(parts[6:])
-            processed_line = "\t".join([domain, tailmatch, path, secure, expires, name, value])
-            processed_lines.append(processed_line)
-        else:
-            # Skip invalid lines
-            print("[save_cookie] skipping invalid line:", line)
-
-    if not processed_lines:
-        return await msg.reply_text("⚠️ No valid cookie entries found in the provided text.")
-
-    try:
-        os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
-        with open(COOKIE_FILE, "w", encoding="utf-8") as f:
-            for pline in processed_lines:
-                f.write(pline + "\n")
-        await msg.reply_text("✅ Instagram cookie saved successfully! It is now clean and usable.")
-    except Exception as e:
-        await msg.reply_text(f"❌ Failed to save cookie: {e}")
-
-# ----------------------
-# Cookie loaders
-# ----------------------
-def load_cookies_for_instaloader(L):
-    """Load Netscape cookies into Instaloader session"""
-    if not os.path.exists(COOKIE_FILE):
-        print("[INSTADL] Cookie file not found!")
-        return False
-    try:
-        L.load_session_from_file("dummy")
-        L.context._session.cookies.clear()
-        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = line.split("\t")
-                if len(parts) != 7:
-                    continue
-                domain, tailmatch, path, secure, expires, name, value = parts
-                secure = secure.upper() == "TRUE"
-                value = value.strip('"')
-                L.context._session.cookies.set(
-                    name, value, domain=domain, path=path, secure=secure
-                )
-        print("[INSTADL] Cookies loaded successfully ✅")
-        return True
-    except Exception as e:
-        print("[INSTADL] Failed loading cookies:", e)
-        return False
-
-def get_cookiefile_for_yt_dlp():
-    return COOKIE_FILE if os.path.exists(COOKIE_FILE) else None
 
 # ----------------------
 # /instadl command
@@ -188,7 +146,6 @@ async def handle_album_download(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     shortcode = st["data"]["shortcode"]
 
-    os.makedirs(ALBUM_FOLDER, exist_ok=True)
     for f in os.listdir(ALBUM_FOLDER):
         try: os.remove(os.path.join(ALBUM_FOLDER, f))
         except: pass
@@ -196,8 +153,24 @@ async def handle_album_download(bot, chat_id):
     msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
 
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
-    if not load_cookies_for_instaloader(L):
-        await msg.edit("❌ Cookies not loaded or invalid! Use /save_cookie first.")
+    # Load cookies from Colab-style Netscape cookie
+    try:
+        L.load_session_from_file("dummy")
+        L.context._session.cookies.clear()
+        with open(COOKIE_FILE_TXT, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) != 7:
+                    continue
+                domain, tailmatch, path, secure, expires, name, value = parts
+                secure = secure.upper() == "TRUE"
+                value = value.strip('"')
+                L.context._session.cookies.set(name, value, domain=domain, path=path, secure=secure)
+    except Exception as e:
+        await msg.edit(f"❌ Failed to load cookies: {e}")
         return
 
     try:
@@ -235,7 +208,6 @@ async def handle_video_download(bot, chat_id):
     st = INSTADL_STATE[chat_id]
     url = st["data"]["url"]
 
-    os.makedirs(VIDEO_FOLDER, exist_ok=True)
     for f in os.listdir(VIDEO_FOLDER):
         try: os.remove(os.path.join(VIDEO_FOLDER, f))
         except: pass
@@ -246,7 +218,7 @@ async def handle_video_download(bot, chat_id):
         "format": "bestvideo+bestaudio/best",
         "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
         "merge_output_format": "mp4",
-        "cookiefile": get_cookiefile_for_yt_dlp(),
+        "cookiefile": COOKIE_FILE_TXT,
         "retries": 5,
         "fragment_retries": 5,
         "sleep_interval": 2,
