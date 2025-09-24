@@ -62,7 +62,7 @@ def extract_shortcode(url: str):
 async def save_cookie_cmd(bot, msg):
     replied = msg.reply_to_message
     if not replied or not replied.text:
-        return await msg.reply_text("Reply to your Netscape HTTP Cookie content with /save_cookie command.")
+        return await msg.reply_text("⚠️ Reply to your Netscape HTTP Cookie content with /save_cookie command.")
 
     cookie_text = replied.text.strip()
     try:
@@ -72,13 +72,17 @@ async def save_cookie_cmd(bot, msg):
     except Exception as e:
         await msg.reply_text(f"❌ Failed to save cookie: {e}")
 
+# ----------------------
+# Cookie loaders
+# ----------------------
 def load_cookies_for_instaloader(L):
+    """Load Netscape cookies into Instaloader session"""
     if not os.path.exists(COOKIE_FILE):
         print("[INSTADL] Cookie file not found!")
         return False
     try:
         L.load_session_from_file("dummy")  # avoid login
-        L.context._session.cookies.clear()  # clear any default cookies
+        L.context._session.cookies.clear()  # clear default
         with open(COOKIE_FILE, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -94,6 +98,10 @@ def load_cookies_for_instaloader(L):
         print("[INSTADL] Failed loading cookies:", e)
         return False
 
+def get_cookiefile_for_yt_dlp():
+    """Return cookiefile path for yt-dlp if exists, else None"""
+    return COOKIE_FILE if os.path.exists(COOKIE_FILE) else None
+
 # ----------------------
 # /instadl command
 # ----------------------
@@ -101,12 +109,12 @@ def load_cookies_for_instaloader(L):
 async def instadl_start(bot, msg):
     replied = msg.reply_to_message
     if not replied or not replied.text:
-        return await msg.reply_text("Reply to an Instagram post URL with /instadl.")
+        return await msg.reply_text("⚠️ Reply to an Instagram post URL with /instadl.")
 
     url = replied.text.strip().split()[0]
     shortcode = extract_shortcode(url)
     if not shortcode:
-        return await msg.reply_text("Couldn't parse shortcode. Use a valid Instagram URL.")
+        return await msg.reply_text("❌ Couldn't parse shortcode. Use a valid Instagram URL.")
 
     chat_id = msg.chat.id
     INSTADL_STATE[chat_id] = {"step": "choose", "last_msgs": [], "data": {"url": url, "shortcode": shortcode}}
@@ -152,10 +160,8 @@ async def handle_album_download(bot, chat_id):
 
     os.makedirs(ALBUM_FOLDER, exist_ok=True)
     for f in os.listdir(ALBUM_FOLDER):
-        try:
-            os.remove(os.path.join(ALBUM_FOLDER, f))
-        except:
-            pass
+        try: os.remove(os.path.join(ALBUM_FOLDER, f))
+        except: pass
 
     msg = await send_clean(bot, chat_id, "📥 Downloading images... (0/0)")
 
@@ -171,7 +177,7 @@ async def handle_album_download(bot, chat_id):
             sidecar = [post]
         total = len(sidecar)
     except Exception as e:
-        await msg.edit(f"Failed to fetch post: {e}")
+        await msg.edit(f"❌ Failed to fetch post: {e}")
         return
 
     for i, node in enumerate(sidecar, 1):
@@ -221,7 +227,7 @@ async def handle_video_download(bot, chat_id):
         "format": "bestvideo+bestaudio/best",
         "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
         "merge_output_format": "mp4",
-        "cookiefile": COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
+        "cookiefile": get_cookiefile_for_yt_dlp(),
         "retries": 5,
         "fragment_retries": 5,
         "sleep_interval": 2,
@@ -253,7 +259,7 @@ async def handle_video_download(bot, chat_id):
 
     files = [f for f in os.listdir(VIDEO_FOLDER) if not f.startswith(".")]
     if not files:
-        await status_msg.edit("Downloaded file not found.")
+        await status_msg.edit("❌ Downloaded file not found.")
         return
 
     file_path = os.path.join(VIDEO_FOLDER, files[0])
@@ -282,12 +288,10 @@ async def handle_video_download(bot, chat_id):
             progress_args=("Upload Started..... Thanks To All Who Supported ❤", status_msg, c_time)
         )
     except Exception as e:
-        await status_msg.edit(f"Upload failed: {e}")
+        await status_msg.edit(f"❌ Upload failed: {e}")
     finally:
-        try:
-            os.remove(file_path)
-        except:
-            pass
+        try: os.remove(file_path)
+        except: pass
 
     try:
         await status_msg.delete()
