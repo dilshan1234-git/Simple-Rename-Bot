@@ -69,27 +69,35 @@ async def save_cookie_cmd(bot, msg):
     processed_lines = []
 
     for line in lines:
-        line = line.strip().replace("\xa0", " ")  # replace non-breaking space
+        line = line.strip()
         if not line:
             continue
+        # Keep comment lines as-is
         if line.startswith("#"):
             processed_lines.append(line)
             continue
+        # Replace non-breaking spaces with normal spaces
+        line = line.replace("\xa0", " ")
+        # Split on any whitespace
         parts = line.split()
         if len(parts) >= 7:
             domain, tailmatch, path, secure, expires, name = parts[:6]
-            value = ' '.join(parts[6:])
-            processed_line = '\t'.join([domain, tailmatch, path, secure, expires, name, value])
+            value = " ".join(parts[6:])
+            processed_line = "\t".join([domain, tailmatch, path, secure, expires, name, value])
             processed_lines.append(processed_line)
+        else:
+            # Skip invalid lines
+            print("[save_cookie] skipping invalid line:", line)
 
     if not processed_lines:
         return await msg.reply_text("⚠️ No valid cookie entries found in the provided text.")
 
     try:
+        os.makedirs(os.path.dirname(COOKIE_FILE), exist_ok=True)
         with open(COOKIE_FILE, "w", encoding="utf-8") as f:
             for pline in processed_lines:
                 f.write(pline + "\n")
-        await msg.reply_text("✅ Instagram cookie saved successfully! ✅")
+        await msg.reply_text("✅ Instagram cookie saved successfully! It is now clean and usable.")
     except Exception as e:
         await msg.reply_text(f"❌ Failed to save cookie: {e}")
 
