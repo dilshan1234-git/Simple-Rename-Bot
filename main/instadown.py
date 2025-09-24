@@ -222,6 +222,10 @@ async def handle_video_download(bot, chat_id):
         "outtmpl": os.path.join(VIDEO_FOLDER, "%(title)s.%(ext)s"),
         "merge_output_format": "mp4",
         "cookiefile": COOKIE_FILE if os.path.exists(COOKIE_FILE) else None,
+        "retries": 5,
+        "fragment_retries": 5,
+        "sleep_interval": 2,
+        "max_sleep_interval": 5,
     }
 
     def ytdl_hook(d):
@@ -231,7 +235,7 @@ async def handle_video_download(bot, chat_id):
                 total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
                 downloaded_bytes = d.get("downloaded_bytes", 0)
                 percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
-                text = f"📥 Downloading video: {d.get('filename','')}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
+                text = f"📥 Downloading video: {os.path.basename(d.get('filename',''))}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
                 asyncio.get_event_loop().create_task(status_msg.edit(text))
             elif d.get("status") == "finished":
                 asyncio.get_event_loop().create_task(status_msg.edit("Merging/processing video..."))
