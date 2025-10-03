@@ -193,7 +193,7 @@ async def handle_album_download(bot, chat_id):
         try: await msg.edit(f"📥 Downloading images... ({i}/{total})")
         except: pass
         try:
-            await bot.send_photo(chat_id, photo=filename, caption=f"Image {i}/{total}")
+            await bot.send_document(chat_id, document=filename, caption=f"Image {i}/{total}")
             os.remove(filename)
         except: pass
 
