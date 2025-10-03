@@ -197,7 +197,7 @@ async def handle_album_download(bot, chat_id):
         dirname_pattern=ALBUM_FOLDER
     )
     
-    # Load cookies
+    # Load cookies and configure session
     try:
         L.context._session.cookies.clear()
         
@@ -205,7 +205,9 @@ async def handle_album_download(bot, chat_id):
             await msg.edit(f"❌ Cookie file not found: {COOKIE_FILE_TXT}")
             INSTADL_STATE.pop(chat_id, None)
             return
-            
+        
+        # Load cookies
+        cookie_count = 0
         with open(COOKIE_FILE_TXT, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -220,7 +222,26 @@ async def handle_album_download(bot, chat_id):
                 L.context._session.cookies.set(
                     name, value, domain=domain, path=path, secure=secure
                 )
-        print("✅ Cookies loaded successfully")
+                cookie_count += 1
+        
+        # Add essential headers to session
+        L.context._session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'X-IG-App-ID': '936619743392459',
+            'X-ASBD-ID': '198387',
+            'X-IG-WWW-Claim': '0',
+            'Origin': 'https://www.instagram.com',
+            'Referer': 'https://www.instagram.com/',
+            'Sec-Fetch-Dest': 'empty',
+            'Sec-Fetch-Mode': 'cors',
+            'Sec-Fetch-Site': 'same-origin',
+        })
+        
+        print(f"✅ Loaded {cookie_count} cookies successfully")
+        
     except Exception as e:
         await msg.edit(f"❌ Failed to load cookies: {e}")
         INSTADL_STATE.pop(chat_id, None)
@@ -240,22 +261,38 @@ async def handle_album_download(bot, chat_id):
 
     # Download and upload images
     downloaded_files = []
+    import requests
+    
     for i, node in enumerate(sidecar, 1):
         filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
         
         try:
             await msg.edit(f"📥 Downloading image {i}/{total}...")
             
-            # Try instaloader download first
-            try:
-                L.download_pic(filename, node.display_url, mtime=post.date_utc)
-            except:
-                # Fallback to requests
-                import requests
-                r = requests.get(node.display_url, timeout=30)
-                r.raise_for_status()
-                with open(filename, "wb") as f:
-                    f.write(r.content)
+            # Use direct download with cookies (more reliable than instaloader)
+            session = requests.Session()
+            
+            # Copy cookies from instaloader session to requests session
+            for cookie in L.context._session.cookies:
+                session.cookies.set(cookie.name, cookie.value, domain=cookie.domain)
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.instagram.com/',
+                'Sec-Fetch-Dest': 'image',
+                'Sec-Fetch-Mode': 'no-cors',
+                'Sec-Fetch-Site': 'same-origin',
+            }
+            
+            # Download image
+            response = session.get(node.display_url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            # Save to file
+            with open(filename, "wb") as f:
+                f.write(response.content)
             
             # Verify file was downloaded
             if not os.path.exists(filename):
@@ -264,12 +301,23 @@ async def handle_album_download(bot, chat_id):
             file_size = os.path.getsize(filename)
             if file_size == 0:
                 raise Exception("Empty file downloaded")
+            
+            if file_size < 1000:
+                raise Exception(f"File too small ({file_size} bytes), likely an error page")
                 
             print(f"✅ Downloaded image {i}: {filename} ({file_size} bytes)")
             downloaded_files.append(filename)
             
+            # Small delay to avoid rate limiting
+            await asyncio.sleep(1)
+            
         except Exception as e:
             print(f"❌ Error downloading image {i}: {e}")
+            error_msg = str(e)
+            if "403" in error_msg or "401" in error_msg:
+                await msg.edit(f"❌ Instagram blocked the request. Your cookies may be expired or invalid.\n\nPlease:\n1. Export fresh cookies from Instagram\n2. Make sure you're logged in\n3. Try again")
+                INSTADL_STATE.pop(chat_id, None)
+                return
             await msg.edit(f"⚠️ Failed to download image {i}/{total}: {e}\nContinuing...")
             await asyncio.sleep(2)
             continue
