@@ -155,7 +155,7 @@ async def handle_album_download(bot, chat_id):
     L = instaloader.Instaloader(download_videos=False, download_video_thumbnails=False, dirname_pattern=ALBUM_FOLDER)
     # Load cookies from Colab-style Netscape cookie
     try:
-        L.load_session_from_file("dummy")
+        #L.load_session_from_file("dummy")
         L.context._session.cookies.clear()
         with open(COOKIE_FILE_TXT, "r", encoding="utf-8") as f:
             for line in f:
