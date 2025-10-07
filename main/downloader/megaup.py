@@ -51,15 +51,17 @@ async def mega_uploader(bot, msg):
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Start rclone upload
+    # Step 4: Start rclone upload with rc enabled
+    rc_port = 5572
     cmd = [
         "rclone", "copy", downloaded_path, "mega:", 
         "--progress", "--stats=1s", "--stats-one-line",
-        "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
+        "--rc", f"--rc-addr=localhost:{rc_port}",
+        "--log-level", "INFO",
+        "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
-
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -68,23 +70,23 @@ async def mega_uploader(bot, msg):
     )
 
     upload_start_time = time.time()
-    last_update_time = time.time()
-    update_interval = 1  # Update every 1 second
+    update_interval = 1  # Update every second
 
     async def live_progress():
-        nonlocal last_update_time
-        # Poll rclone stats every second
+        last_update_time = time.time()
         while proc.poll() is None:
             try:
-                stats_json = os.popen(
-                    f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}"
-                ).read()
-                stats = json.loads(stats_json)
-                used_bytes = stats.get("used", 0)
-                total_bytes = stats.get("total", 0)
+                # Query rclone rc for current operations
+                rc_output = os.popen(f"rclone rc operations/list --json --rc-addr=localhost:{rc_port}").read()
+                data = json.loads(rc_output)
+                transferred = 0
+                for op in data.get("operations", []):
+                    if op.get("name") == "copy" and filename in op.get("src", ""):
+                        transferred = op.get("bytes", 0)
+                # Update Telegram every second
                 if time.time() - last_update_time >= update_interval:
                     await progress_message(
-                        used_bytes if used_bytes <= total_size else total_size,
+                        min(transferred, total_size),
                         total_size,
                         f"☁️ **Uploading:** **`{filename}`**",
                         sts,
@@ -92,11 +94,10 @@ async def mega_uploader(bot, msg):
                     )
                     last_update_time = time.time()
             except Exception as e:
-                # Ignore occasional JSON parse errors while uploading
                 pass
             await asyncio.sleep(1)
 
-    # Run live progress in parallel
+    # Run live progress
     progress_task = asyncio.create_task(live_progress())
     proc.wait()
     await progress_task
