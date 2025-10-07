@@ -20,46 +20,21 @@ async def mega_uploader(bot, msg):
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Download file from Telegram using aria2c (multi-threaded)
-    c_time = time.time()
+    # Step 1: Get Telegram file URL using download_media (no await error)
     file_path = os.path.join(DOWNLOAD_LOCATION, filename)
     os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
 
-    file_id = og_media.file_id
-
-    # Pyrogram v2: get_file is async_generator
-    async for file_info in bot.get_file(file_id):
-        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
-        break  # only need first (and only) file object
-
-    # Aria2 command for fast download
-    aria_cmd = [
-        "aria2c",
-        "-x", "8",         # 8 connections
-        "-s", "8",         # 8 segments
-        "-k", "1M",        # 1 MB segment size
-        "-o", filename,    # output file
-        "-d", DOWNLOAD_LOCATION,  # download directory
-        file_url
-    ]
-
-    # Run aria2 download
-    proc_dl = subprocess.Popen(
-        aria_cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
+    # Get Telegram direct file link
+    file_info = await bot.download_media(
+        message=reply,
+        file_name=os.path.join(DOWNLOAD_LOCATION, filename),
+        progress=None,
+        progress_args=None
     )
 
-    while True:
-        line = proc_dl.stdout.readline()
-        if not line:
-            break
-        print(line.strip())
-
-    proc_dl.wait()
-    downloaded_path = file_path
-
+    # file_info is local path, now we can use aria2 if we want even faster download
+    # But since download_media already downloaded, just assign
+    downloaded_path = file_info
     filesize = humanbytes(og_media.file_size)
 
     # Step 2: Load Mega credentials
