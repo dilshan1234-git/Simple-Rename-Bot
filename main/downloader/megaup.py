@@ -1,4 +1,4 @@
-import os, time, subprocess, json
+import os, time, subprocess, json, re, asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -29,6 +29,7 @@ async def mega_uploader(bot, msg):
     )
 
     filesize = humanbytes(og_media.file_size)
+    total_size = og_media.file_size
 
     # Step 2: Load Mega credentials
     login_path = os.path.join(os.path.dirname(__file__), "mega_login.txt")
@@ -46,10 +47,7 @@ async def mega_uploader(bot, msg):
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Show Uploading Status in Bot (Static)
-    await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
-
-    # Step 5: Upload to Mega and stream output to Colab logs
+    # Step 4: Upload to Mega with real-time progress
     cmd = [
         "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
         "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
@@ -61,19 +59,61 @@ async def mega_uploader(bot, msg):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
+        bufsize=1
     )
 
-    # Print rclone progress in Colab logs
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            break
-        print(line.strip())
-
+    # Track progress and update message using the same progress_message function
+    upload_start_time = time.time()
+    last_update_time = time.time()
+    update_interval = 2  # Update every 2 seconds
+    
+    # Pattern to extract progress from rclone output
+    pattern = re.compile(r'(\d+\.?\d*)\s*([KMGT]?i?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?i?B),\s*(\d+)%')
+    
+    async def update_upload_progress():
+        nonlocal last_update_time
+        
+        while True:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            
+            print(line.strip())  # Still log to console
+            
+            # Parse progress from rclone output
+            match = pattern.search(line)
+            if match and time.time() - last_update_time >= update_interval:
+                try:
+                    # Parse transferred size
+                    transferred_val = float(match.group(1))
+                    transferred_unit = match.group(2)
+                    
+                    # Convert to bytes
+                    units = {'B': 1, 'KiB': 1024, 'MiB': 1024**2, 'GiB': 1024**3, 'TiB': 1024**4,
+                            'KB': 1000, 'MB': 1000**2, 'GB': 1000**3, 'TB': 1000**4}
+                    
+                    current_bytes = int(transferred_val * units.get(transferred_unit, 1))
+                    
+                    # Use the same progress_message function
+                    await progress_message(
+                        current_bytes,
+                        total_size,
+                        f"☁️ **Uploading:** **`{filename}`**",
+                        sts,
+                        upload_start_time
+                    )
+                    last_update_time = time.time()
+                    
+                except Exception as e:
+                    if "MESSAGE_NOT_MODIFIED" not in str(e):
+                        print(f"Error updating progress: {e}")
+    
+    # Run progress updates
+    await update_upload_progress()
     proc.wait()
 
-    # Step 6: Get Mega Storage Info (via --json)
+    # Step 5: Get Mega Storage Info (via --json)
     try:
         about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
         stats = json.loads(about_output)
@@ -98,7 +138,7 @@ async def mega_uploader(bot, msg):
         used_pct = 0
         bar = "░" * 10
 
-    # Step 7: Final Message with Storage Info and Delete Button
+    # Step 6: Final Message with Storage Info and Delete Button
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
@@ -115,9 +155,13 @@ async def mega_uploader(bot, msg):
         [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
     ])
 
-    await sts.edit(final_text, reply_markup=btn)
+    try:
+        await sts.edit(final_text, reply_markup=btn)
+    except Exception as e:
+        if "MESSAGE_NOT_MODIFIED" not in str(e):
+            print(f"Error updating final message: {e}")
 
-    # Step 8: Cleanup
+    # Step 7: Cleanup
     try:
         os.remove(downloaded_path)
     except:
