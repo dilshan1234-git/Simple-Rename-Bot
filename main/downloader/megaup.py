@@ -1,71 +1,116 @@
-import os, time, subprocess, json
+import os, time, subprocess, json, asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import DOWNLOAD_LOCATION, ADMIN, API_ID, API_HASH, BOT_TOKEN
+from pyrogram.raw.functions.upload import GetFile
+from pyrogram.raw.types import InputDocumentFileLocation
+from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
-# Telethon client for fast downloads (lazy initialization)
-telethon_client = None
-
-async def get_telethon_client():
-    """Initialize Telethon bot client for fast downloads"""
-    global telethon_client
-    if telethon_client is None:
-        from telethon import TelegramClient
-        telethon_client = TelegramClient('fast_bot', API_ID, API_HASH)
-        await telethon_client.start(bot_token=BOT_TOKEN)
-    return telethon_client
-
-async def fast_download(message, file_path, sts):
-    """Download using fast-telethon (5-10x faster)"""
+async def optimized_download(client, message, file_path, sts):
+    """
+    Optimized parallel chunk download for maximum speed
+    Downloads file in parallel chunks using Pyrogram's raw API
+    """
     try:
-        from telethon.sync import TelegramClient
-        from fast_telethon import download_file
-        
-        # Get telethon client
-        client = await get_telethon_client()
-        
-        # Get message in telethon
-        tele_msg = await client.get_messages(message.chat.id, ids=message.id)
-        
-        if not tele_msg or not tele_msg.media:
+        media = message.document or message.video or message.audio
+        if not media:
             return None
         
-        print(f"🚀 Using fast-telethon for high-speed download...")
+        file_size = media.file_size
+        file_id = media.file_id
+        file_ref = media.file_reference
         
-        # Download with fast-telethon
+        # Get access hash
+        file_msg = await client.get_messages(message.chat.id, message.id)
+        file_media = file_msg.document or file_msg.video or file_msg.audio
+        access_hash = file_media.access_hash
+        
+        print(f"🚀 Starting optimized parallel download...")
+        
+        # Chunk settings for parallel download
+        chunk_size = 1024 * 1024  # 1MB chunks
+        concurrent_chunks = 8  # Download 8 chunks simultaneously
+        
+        os.makedirs(os.path.dirname(file_path), exist_ok=True)
+        
+        # Create file location
+        location = InputDocumentFileLocation(
+            id=int(file_id),
+            access_hash=access_hash,
+            file_reference=file_ref,
+            thumb_size=""
+        )
+        
+        # Download chunks in parallel
+        downloaded_size = 0
         start_time = time.time()
         last_update = start_time
         
-        async def progress_callback(current, total):
-            nonlocal last_update
-            if time.time() - last_update > 2:  # Update every 2 seconds
-                try:
-                    percent = (current / total) * 100
-                    elapsed = time.time() - start_time
-                    speed = current / elapsed if elapsed > 0 else 0
+        with open(file_path, 'wb') as f:
+            offset = 0
+            while offset < file_size:
+                # Prepare chunk download tasks
+                tasks = []
+                chunk_offsets = []
+                
+                for i in range(concurrent_chunks):
+                    current_offset = offset + (i * chunk_size)
+                    if current_offset >= file_size:
+                        break
                     
-                    await sts.edit(
-                        f"📥 **Downloading:** **`{os.path.basename(file_path)}`**\n\n"
-                        f"📊 {percent:.1f}% | ⚡ {humanbytes(int(speed))}/s"
+                    chunk_offsets.append(current_offset)
+                    
+                    # Create download task for each chunk
+                    task = client.invoke(
+                        GetFile(
+                            location=location,
+                            offset=current_offset,
+                            limit=min(chunk_size, file_size - current_offset)
+                        )
                     )
-                    last_update = time.time()
-                except:
-                    pass
+                    tasks.append(task)
+                
+                # Download all chunks in parallel
+                if tasks:
+                    chunks = await asyncio.gather(*tasks, return_exceptions=True)
+                    
+                    # Write chunks in correct order
+                    for i, chunk in enumerate(chunks):
+                        if isinstance(chunk, Exception):
+                            print(f"⚠️ Chunk download failed: {chunk}")
+                            return None
+                        
+                        f.seek(chunk_offsets[i])
+                        f.write(chunk.bytes)
+                        downloaded_size += len(chunk.bytes)
+                    
+                    # Update progress
+                    if time.time() - last_update > 2:
+                        try:
+                            percent = (downloaded_size / file_size) * 100
+                            elapsed = time.time() - start_time
+                            speed = downloaded_size / elapsed if elapsed > 0 else 0
+                            eta = (file_size - downloaded_size) / speed if speed > 0 else 0
+                            
+                            await sts.edit(
+                                f"📥 **Downloading (8x Parallel):** **`{os.path.basename(file_path)}`**\n\n"
+                                f"📊 **Progress:** {percent:.1f}%\n"
+                                f"⚡ **Speed:** {humanbytes(int(speed))}/s\n"
+                                f"⏱️ **ETA:** {int(eta)}s"
+                            )
+                            last_update = time.time()
+                        except:
+                            pass
+                
+                offset += concurrent_chunks * chunk_size
         
-        # Fast download
-        file_data = await download_file(
-            client=client,
-            location=tele_msg.media,
-            out=open(file_path, 'wb'),
-            progress_callback=progress_callback
-        )
-        
-        print(f"✅ Fast download completed!")
+        print(f"✅ Optimized download completed!")
         return file_path
         
     except Exception as e:
-        print(f"⚠️ Fast-telethon failed: {e}")
+        print(f"⚠️ Optimized download failed: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
@@ -88,12 +133,12 @@ async def mega_uploader(bot, msg):
     os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
     file_path = os.path.join(DOWNLOAD_LOCATION, filename)
     
-    # Try fast-telethon first
-    downloaded_path = await fast_download(reply, file_path, sts)
+    # Try optimized parallel download first
+    downloaded_path = await optimized_download(bot, reply, file_path, sts)
     
-    # Fallback to pyrogram if fast-telethon fails
+    # Fallback to standard pyrogram download
     if not downloaded_path:
-        print("⚠️ Falling back to Pyrogram download")
+        print("⚠️ Falling back to standard Pyrogram download")
         c_time = time.time()
         downloaded_path = await reply.download(
             file_name=file_path,
