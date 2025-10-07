@@ -1,8 +1,7 @@
 import os
 import time
-import subprocess
 import json
-import re
+import subprocess
 import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
@@ -25,7 +24,7 @@ async def mega_uploader(bot, msg):
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Download file from Telegram
+    # Step 1: Download from Telegram
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -45,17 +44,18 @@ async def mega_uploader(bot, msg):
     except Exception as e:
         return await sts.edit(f"❌ Failed to load mega_login.txt: {e}")
 
-    # Step 3: Create rclone config file
+    # Step 3: Create rclone config
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
     obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Upload to Mega with real-time progress
+    # Step 4: Start rclone upload
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
+        "rclone", "copy", downloaded_path, "mega:", 
+        "--progress", "--stats=1s", "--stats-one-line",
+        "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
@@ -64,59 +64,48 @@ async def mega_uploader(bot, msg):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        text=True
     )
 
     upload_start_time = time.time()
     last_update_time = time.time()
-    update_interval = 2  # Update every 2 seconds
+    update_interval = 1  # Update every 1 second
 
-    # Pattern to extract progress from rclone output
-    pattern = re.compile(r'(\d+\.?\d*)\s*([KMGT]?i?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?i?B),\s*(\d+)%')
-
-    async def update_upload_progress():
+    async def live_progress():
         nonlocal last_update_time
-        buffer = ""
+        # Poll rclone stats every second
+        while proc.poll() is None:
+            try:
+                stats_json = os.popen(
+                    f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}"
+                ).read()
+                stats = json.loads(stats_json)
+                used_bytes = stats.get("used", 0)
+                total_bytes = stats.get("total", 0)
+                if time.time() - last_update_time >= update_interval:
+                    await progress_message(
+                        used_bytes if used_bytes <= total_size else total_size,
+                        total_size,
+                        f"☁️ **Uploading:** **`{filename}`**",
+                        sts,
+                        upload_start_time
+                    )
+                    last_update_time = time.time()
+            except Exception as e:
+                # Ignore occasional JSON parse errors while uploading
+                pass
+            await asyncio.sleep(1)
 
-        while True:
-            char = proc.stdout.read(1)
-            if not char:
-                break
-            buffer += char
-
-            if "\n" in buffer or "\r" in buffer:
-                lines = re.split(r'[\r\n]+', buffer)
-                for line in lines[:-1]:
-                    print(line.strip())
-                    match = pattern.search(line)
-                    if match and time.time() - last_update_time >= update_interval:
-                        try:
-                            transferred_val = float(match.group(1))
-                            transferred_unit = match.group(2)
-                            units = {'B':1,'KiB':1024,'MiB':1024**2,'GiB':1024**3,'TiB':1024**4,
-                                     'KB':1000,'MB':1000**2,'GB':1000**3,'TB':1000**4}
-                            current_bytes = int(transferred_val * units.get(transferred_unit,1))
-                            await progress_message(
-                                current_bytes,
-                                total_size,
-                                f"☁️ **Uploading:** **`{filename}`**",
-                                sts,
-                                upload_start_time
-                            )
-                            last_update_time = time.time()
-                        except Exception as e:
-                            if "MESSAGE_NOT_MODIFIED" not in str(e):
-                                print(f"Error updating progress: {e}")
-                buffer = lines[-1]
-
-    # Run progress updates
-    await update_upload_progress()
+    # Run live progress in parallel
+    progress_task = asyncio.create_task(live_progress())
     proc.wait()
+    await progress_task
 
-    # Step 5: Get Mega Storage Info (via --json)
+    # Step 5: Mega storage info
     try:
-        about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
+        about_output = os.popen(
+            f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}"
+        ).read()
         stats = json.loads(about_output)
         total_bytes = stats.get("total", 0)
         used_bytes = stats.get("used", 0)
@@ -135,7 +124,7 @@ async def mega_uploader(bot, msg):
         used_pct = 0
         bar = "░" * 10
 
-    # Step 6: Final Message
+    # Step 6: Final message
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
@@ -146,7 +135,7 @@ async def mega_uploader(bot, msg):
             f"{bar} `{used_pct}%` used"
         )
     else:
-        final_text = "❌ Upload failed. Please check your credentials or try again later."
+        final_text = "❌ Upload failed. Please check credentials or try again later."
 
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
