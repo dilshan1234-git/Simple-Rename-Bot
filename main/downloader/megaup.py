@@ -1,8 +1,72 @@
 import os, time, subprocess, json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import DOWNLOAD_LOCATION, ADMIN
+from config import DOWNLOAD_LOCATION, ADMIN, API_ID, API_HASH, BOT_TOKEN
 from main.utils import progress_message, humanbytes
+
+# Telethon client for fast downloads (lazy initialization)
+telethon_client = None
+
+async def get_telethon_client():
+    """Initialize Telethon bot client for fast downloads"""
+    global telethon_client
+    if telethon_client is None:
+        from telethon import TelegramClient
+        telethon_client = TelegramClient('fast_bot', API_ID, API_HASH)
+        await telethon_client.start(bot_token=BOT_TOKEN)
+    return telethon_client
+
+async def fast_download(message, file_path, sts):
+    """Download using fast-telethon (5-10x faster)"""
+    try:
+        from telethon.sync import TelegramClient
+        from fast_telethon import download_file
+        
+        # Get telethon client
+        client = await get_telethon_client()
+        
+        # Get message in telethon
+        tele_msg = await client.get_messages(message.chat.id, ids=message.id)
+        
+        if not tele_msg or not tele_msg.media:
+            return None
+        
+        print(f"🚀 Using fast-telethon for high-speed download...")
+        
+        # Download with fast-telethon
+        start_time = time.time()
+        last_update = start_time
+        
+        async def progress_callback(current, total):
+            nonlocal last_update
+            if time.time() - last_update > 2:  # Update every 2 seconds
+                try:
+                    percent = (current / total) * 100
+                    elapsed = time.time() - start_time
+                    speed = current / elapsed if elapsed > 0 else 0
+                    
+                    await sts.edit(
+                        f"📥 **Downloading:** **`{os.path.basename(file_path)}`**\n\n"
+                        f"📊 {percent:.1f}% | ⚡ {humanbytes(int(speed))}/s"
+                    )
+                    last_update = time.time()
+                except:
+                    pass
+        
+        # Fast download
+        file_data = await download_file(
+            client=client,
+            location=tele_msg.media,
+            out=open(file_path, 'wb'),
+            progress_callback=progress_callback
+        )
+        
+        print(f"✅ Fast download completed!")
+        return file_path
+        
+    except Exception as e:
+        print(f"⚠️ Fast-telethon failed: {e}")
+        return None
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
@@ -21,12 +85,21 @@ async def mega_uploader(bot, msg):
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
     # Step 1: Download file from Telegram
-    c_time = time.time()
-    downloaded_path = await reply.download(
-        file_name=os.path.join(DOWNLOAD_LOCATION, filename),
-        progress=progress_message,
-        progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
-    )
+    os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
+    file_path = os.path.join(DOWNLOAD_LOCATION, filename)
+    
+    # Try fast-telethon first
+    downloaded_path = await fast_download(reply, file_path, sts)
+    
+    # Fallback to pyrogram if fast-telethon fails
+    if not downloaded_path:
+        print("⚠️ Falling back to Pyrogram download")
+        c_time = time.time()
+        downloaded_path = await reply.download(
+            file_name=file_path,
+            progress=progress_message,
+            progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
+        )
 
     filesize = humanbytes(og_media.file_size)
 
