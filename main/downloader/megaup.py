@@ -26,11 +26,11 @@ async def mega_uploader(bot, msg):
     os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
 
     file_id = og_media.file_id
-    file_ref = getattr(og_media, "file_reference", None)
 
-    # Get Telegram file URL
-    file_info = await bot.get_file(file_id)
-    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+    # Pyrogram v2: get_file is async_generator
+    async for file_info in bot.get_file(file_id):
+        file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+        break  # only need first (and only) file object
 
     # Aria2 command for fast download
     aria_cmd = [
