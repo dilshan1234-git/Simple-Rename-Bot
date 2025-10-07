@@ -1,8 +1,36 @@
 import os, time, subprocess, json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
-from config import DOWNLOAD_LOCATION, ADMIN
+from config import DOWNLOAD_LOCATION, ADMIN, BOT_TOKEN
 from main.utils import progress_message, humanbytes
+
+async def aria2_download(file_url, file_path, filename):
+    """
+    Download file using aria2c with 16 parallel connections
+    """
+    try:
+        cmd = [
+            "aria2c",
+            file_url,
+            "-o", filename,
+            "-d", DOWNLOAD_LOCATION,
+            "-x", "16",
+            "-s", "16",
+            "-k", "1M",
+            "--file-allocation=none",
+            "--max-connection-per-server=16",
+            "--console-log-level=error"
+        ]
+        
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if proc.returncode == 0:
+            return file_path
+        else:
+            return None
+            
+    except Exception as e:
+        return None
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
@@ -20,21 +48,29 @@ async def mega_uploader(bot, msg):
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Get Telegram file URL using download_media (no await error)
-    file_path = os.path.join(DOWNLOAD_LOCATION, filename)
+    # Step 1: Download file from Telegram
     os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
+    file_path = os.path.join(DOWNLOAD_LOCATION, filename)
+    
+    # Try aria2c download for small files first (Bot API limit: 20MB)
+    downloaded_path = None
+    if og_media.file_size <= 20 * 1024 * 1024:  # 20MB
+        try:
+            file_obj = await bot.get_file(media.file_id)
+            file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_obj.file_path}"
+            downloaded_path = await aria2_download(file_url, file_path, filename)
+        except:
+            pass
+    
+    # Fallback to standard download
+    if not downloaded_path:
+        c_time = time.time()
+        downloaded_path = await reply.download(
+            file_name=file_path,
+            progress=progress_message,
+            progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
+        )
 
-    # Get Telegram direct file link
-    file_info = await bot.download_media(
-        message=reply,
-        file_name=os.path.join(DOWNLOAD_LOCATION, filename),
-        progress=None,
-        progress_args=None
-    )
-
-    # file_info is local path, now we can use aria2 if we want even faster download
-    # But since download_media already downloaded, just assign
-    downloaded_path = file_info
     filesize = humanbytes(og_media.file_size)
 
     # Step 2: Load Mega credentials
