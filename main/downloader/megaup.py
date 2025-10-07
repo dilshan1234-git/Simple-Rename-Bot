@@ -1,8 +1,4 @@
-import os
-import time
-import json
-import subprocess
-import asyncio
+import os, time, subprocess, json, asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -13,18 +9,17 @@ async def mega_uploader(bot, msg):
     reply = msg.reply_to_message
     if not reply:
         return await msg.reply_text("📌 Please reply to a file (video, audio, doc) to upload to Mega.nz.")
-
+    
     media = reply.document or reply.video or reply.audio
     if not media:
         return await msg.reply_text("❌ Unsupported file type.")
 
-    og_media = getattr(reply, reply.media.value)
-    filename = og_media.file_name or "uploaded_file"
-
+    filename = media.file_name or "uploaded_file"
+    
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Download from Telegram
+    # Step 1: Download file from Telegram
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -32,8 +27,7 @@ async def mega_uploader(bot, msg):
         progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
     )
 
-    filesize = humanbytes(og_media.file_size)
-    total_size = og_media.file_size
+    filesize = humanbytes(media.file_size)
 
     # Step 2: Load Mega credentials
     login_path = os.path.join(os.path.dirname(__file__), "mega_login.txt")
@@ -44,70 +38,65 @@ async def mega_uploader(bot, msg):
     except Exception as e:
         return await sts.edit(f"❌ Failed to load mega_login.txt: {e}")
 
-    # Step 3: Create rclone config
+    # Step 3: Create rclone config file
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
     obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
         f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
-    # Step 4: Start rclone upload with rc enabled
-    rc_port = 5572
+    # Step 4: Show Uploading Status in Bot
+    await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+
+    # Step 5: Upload to Mega and stream output
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", 
-        "--progress", "--stats=1s", "--stats-one-line",
-        "--rc", f"--rc-addr=localhost:{rc_port}",
-        "--log-level", "INFO",
-        "--config", os.path.join(rclone_config_path, "rclone.conf")
+        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
+        "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
-    print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True
+        text=True,
+        bufsize=1
     )
 
-    upload_start_time = time.time()
-    update_interval = 1  # Update every second
+    last_edit_time = time.time()
+    upload_progress_text = f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait..."
 
-    async def live_progress():
-        last_update_time = time.time()
-        while proc.poll() is None:
-            try:
-                # Query rclone rc for current operations
-                rc_output = os.popen(f"rclone rc operations/list --json --rc-addr=localhost:{rc_port}").read()
-                data = json.loads(rc_output)
-                transferred = 0
-                for op in data.get("operations", []):
-                    if op.get("name") == "copy" and filename in op.get("src", ""):
-                        transferred = op.get("bytes", 0)
-                # Update Telegram every second
-                if time.time() - last_update_time >= update_interval:
-                    await progress_message(
-                        min(transferred, total_size),
-                        total_size,
-                        f"☁️ **Uploading:** **`{filename}`**",
-                        sts,
-                        upload_start_time
-                    )
-                    last_update_time = time.time()
-            except Exception as e:
-                pass
-            await asyncio.sleep(1)
+    # Print rclone progress live in Colab and periodically update Telegram
+    while True:
+        line = proc.stdout.readline()
+        if line == "" and proc.poll() is not None:
+            break
+        if line:
+            line = line.strip()
+            print(line)  # Live Colab logs
 
-    # Run live progress
-    progress_task = asyncio.create_task(live_progress())
+            # Extract percentage from rclone output (example: "Transferred: 12%...")
+            if "%" in line:
+                try:
+                    percent = line.split("%")[0].split()[-1]  # crude extract
+                    upload_progress_text = f"☁️ **Uploading:** **`{filename}`**\n\n⏳ {percent}% uploaded"
+                except:
+                    pass
+
+            # Update Telegram every 3 seconds
+            if time.time() - last_edit_time > 3:
+                try:
+                    await sts.edit(upload_progress_text)
+                except:
+                    pass
+                last_edit_time = time.time()
+
     proc.wait()
-    await progress_task
 
-    # Step 5: Mega storage info
+    # Step 6: Get Mega Storage Info (via --json)
     try:
-        about_output = os.popen(
-            f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}"
-        ).read()
+        about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
         stats = json.loads(about_output)
+
         total_bytes = stats.get("total", 0)
         used_bytes = stats.get("used", 0)
         free_bytes = stats.get("free", 0)
@@ -117,15 +106,17 @@ async def mega_uploader(bot, msg):
         free = humanbytes(free_bytes)
 
         used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+
         full_blocks = used_pct // 10
         empty_blocks = 10 - full_blocks
         bar = "█" * full_blocks + "░" * empty_blocks
-    except Exception:
+
+    except:
         total = used = free = "Unknown"
         used_pct = 0
         bar = "░" * 10
 
-    # Step 6: Final message
+    # Step 7: Final Message
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
@@ -136,19 +127,15 @@ async def mega_uploader(bot, msg):
             f"{bar} `{used_pct}%` used"
         )
     else:
-        final_text = "❌ Upload failed. Please check credentials or try again later."
+        final_text = "❌ Upload failed. Please check your credentials or try again later."
 
     btn = InlineKeyboardMarkup([
         [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
     ])
 
-    try:
-        await sts.edit(final_text, reply_markup=btn)
-    except Exception as e:
-        if "MESSAGE_NOT_MODIFIED" not in str(e):
-            print(f"Error updating final message: {e}")
+    await sts.edit(final_text, reply_markup=btn)
 
-    # Step 7: Cleanup
+    # Step 8: Cleanup
     try:
         os.remove(downloaded_path)
     except:
