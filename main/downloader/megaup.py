@@ -20,13 +20,45 @@ async def mega_uploader(bot, msg):
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 1: Download file from Telegram
+    # Step 1: Download file from Telegram using aria2c (multi-threaded)
     c_time = time.time()
-    downloaded_path = await reply.download(
-        file_name=os.path.join(DOWNLOAD_LOCATION, filename),
-        progress=progress_message,
-        progress_args=(f"📥 **Downloading:** **`{filename}`**", sts, c_time)
+    file_path = os.path.join(DOWNLOAD_LOCATION, filename)
+    os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
+
+    file_id = og_media.file_id
+    file_ref = getattr(og_media, "file_reference", None)
+
+    # Get Telegram file URL
+    file_info = await bot.get_file(file_id)
+    file_url = f"https://api.telegram.org/file/bot{bot.token}/{file_info.file_path}"
+
+    # Aria2 command for fast download
+    aria_cmd = [
+        "aria2c",
+        "-x", "8",         # 8 connections
+        "-s", "8",         # 8 segments
+        "-k", "1M",        # 1 MB segment size
+        "-o", filename,    # output file
+        "-d", DOWNLOAD_LOCATION,  # download directory
+        file_url
+    ]
+
+    # Run aria2 download
+    proc_dl = subprocess.Popen(
+        aria_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True
     )
+
+    while True:
+        line = proc_dl.stdout.readline()
+        if not line:
+            break
+        print(line.strip())
+
+    proc_dl.wait()
+    downloaded_path = file_path
 
     filesize = humanbytes(og_media.file_size)
 
