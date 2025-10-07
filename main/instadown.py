@@ -20,7 +20,7 @@ DOWNLOAD_FOLDER = VIDEO_FOLDER  # For yt-dlp downloads
 # ----------------------
 # Google Colab style cookie setup
 # ----------------------
-COOKIE_JSON = "/content/main/cookies.json"  # JSON exported from browser
+COOKIE_JSON = "/content/Simple-Rename-Bot/main/cookies.json"  # JSON exported from browser
 COOKIE_FILE_TXT = "/content/cookies.txt"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(ALBUM_FOLDER, exist_ok=True)
