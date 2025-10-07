@@ -48,9 +48,9 @@ async def mega_uploader(bot, msg):
     # Step 4: Show Uploading Status in Bot
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 5: Upload to Mega and stream output
+    # Step 5: Upload to Mega and stream output live
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
+        "rclone", "copy", downloaded_path, "mega:", "--progress",
         "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
     ]
 
@@ -64,31 +64,35 @@ async def mega_uploader(bot, msg):
 
     last_edit_time = time.time()
     upload_progress_text = f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait..."
+    buffer = ""
 
-    # Print rclone progress live in Colab and periodically update Telegram
+    # Live Colab log + Telegram progress
     while True:
-        line = proc.stdout.readline()
-        if line == "" and proc.poll() is not None:
+        chunk = proc.stdout.read(1)  # Read character by character
+        if chunk == "" and proc.poll() is not None:
             break
-        if line:
-            line = line.strip()
-            print(line)  # Live Colab logs
+        if chunk:
+            buffer += chunk
+            if "\r" in buffer:
+                last_line = buffer.split("\r")[-1]
+                buffer = last_line  # keep only last line
+                print(last_line, end="\r")  # live Colab output
 
-            # Extract percentage from rclone output (example: "Transferred: 12%...")
-            if "%" in line:
-                try:
-                    percent = line.split("%")[0].split()[-1]  # crude extract
-                    upload_progress_text = f"☁️ **Uploading:** **`{filename}`**\n\n⏳ {percent}% uploaded"
-                except:
-                    pass
+                # Extract percentage from rclone output
+                if "%" in last_line:
+                    try:
+                        percent = last_line.split("%")[0].split()[-1]
+                        upload_progress_text = f"☁️ **Uploading:** **`{filename}`**\n\n⏳ {percent}% uploaded"
+                    except:
+                        pass
 
-            # Update Telegram every 3 seconds
-            if time.time() - last_edit_time > 3:
-                try:
-                    await sts.edit(upload_progress_text)
-                except:
-                    pass
-                last_edit_time = time.time()
+                # Update Telegram every 3 seconds
+                if time.time() - last_edit_time > 3:
+                    try:
+                        await sts.edit(upload_progress_text)
+                    except:
+                        pass
+                    last_edit_time = time.time()
 
     proc.wait()
 
