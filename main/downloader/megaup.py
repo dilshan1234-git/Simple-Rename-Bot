@@ -1,4 +1,9 @@
-import os, time, subprocess, json, re, asyncio
+import os
+import time
+import subprocess
+import json
+import re
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -9,14 +14,14 @@ async def mega_uploader(bot, msg):
     reply = msg.reply_to_message
     if not reply:
         return await msg.reply_text("📌 Please reply to a file (video, audio, doc) to upload to Mega.nz.")
-    
+
     media = reply.document or reply.video or reply.audio
     if not media:
         return await msg.reply_text("❌ Unsupported file type.")
 
     og_media = getattr(reply, reply.media.value)
     filename = og_media.file_name or "uploaded_file"
-    
+
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
@@ -63,52 +68,48 @@ async def mega_uploader(bot, msg):
         bufsize=1
     )
 
-    # Track progress and update message using the same progress_message function
     upload_start_time = time.time()
     last_update_time = time.time()
     update_interval = 2  # Update every 2 seconds
-    
+
     # Pattern to extract progress from rclone output
     pattern = re.compile(r'(\d+\.?\d*)\s*([KMGT]?i?B)\s*/\s*(\d+\.?\d*)\s*([KMGT]?i?B),\s*(\d+)%')
-    
+
     async def update_upload_progress():
         nonlocal last_update_time
-        
+        buffer = ""
+
         while True:
-            line = proc.stdout.readline()
-            if not line:
+            char = proc.stdout.read(1)
+            if not char:
                 break
-            
-            print(line.strip())  # Still log to console
-            
-            # Parse progress from rclone output
-            match = pattern.search(line)
-            if match and time.time() - last_update_time >= update_interval:
-                try:
-                    # Parse transferred size
-                    transferred_val = float(match.group(1))
-                    transferred_unit = match.group(2)
-                    
-                    # Convert to bytes
-                    units = {'B': 1, 'KiB': 1024, 'MiB': 1024**2, 'GiB': 1024**3, 'TiB': 1024**4,
-                            'KB': 1000, 'MB': 1000**2, 'GB': 1000**3, 'TB': 1000**4}
-                    
-                    current_bytes = int(transferred_val * units.get(transferred_unit, 1))
-                    
-                    # Use the same progress_message function
-                    await progress_message(
-                        current_bytes,
-                        total_size,
-                        f"☁️ **Uploading:** **`{filename}`**",
-                        sts,
-                        upload_start_time
-                    )
-                    last_update_time = time.time()
-                    
-                except Exception as e:
-                    if "MESSAGE_NOT_MODIFIED" not in str(e):
-                        print(f"Error updating progress: {e}")
-    
+            buffer += char
+
+            if "\n" in buffer or "\r" in buffer:
+                lines = re.split(r'[\r\n]+', buffer)
+                for line in lines[:-1]:
+                    print(line.strip())
+                    match = pattern.search(line)
+                    if match and time.time() - last_update_time >= update_interval:
+                        try:
+                            transferred_val = float(match.group(1))
+                            transferred_unit = match.group(2)
+                            units = {'B':1,'KiB':1024,'MiB':1024**2,'GiB':1024**3,'TiB':1024**4,
+                                     'KB':1000,'MB':1000**2,'GB':1000**3,'TB':1000**4}
+                            current_bytes = int(transferred_val * units.get(transferred_unit,1))
+                            await progress_message(
+                                current_bytes,
+                                total_size,
+                                f"☁️ **Uploading:** **`{filename}`**",
+                                sts,
+                                upload_start_time
+                            )
+                            last_update_time = time.time()
+                        except Exception as e:
+                            if "MESSAGE_NOT_MODIFIED" not in str(e):
+                                print(f"Error updating progress: {e}")
+                buffer = lines[-1]
+
     # Run progress updates
     await update_upload_progress()
     proc.wait()
@@ -117,7 +118,6 @@ async def mega_uploader(bot, msg):
     try:
         about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
         stats = json.loads(about_output)
-
         total_bytes = stats.get("total", 0)
         used_bytes = stats.get("used", 0)
         free_bytes = stats.get("free", 0)
@@ -127,18 +127,15 @@ async def mega_uploader(bot, msg):
         free = humanbytes(free_bytes)
 
         used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
-
-        # Draw storage bar
         full_blocks = used_pct // 10
         empty_blocks = 10 - full_blocks
         bar = "█" * full_blocks + "░" * empty_blocks
-
-    except Exception as e:
+    except Exception:
         total = used = free = "Unknown"
         used_pct = 0
         bar = "░" * 10
 
-    # Step 6: Final Message with Storage Info and Delete Button
+    # Step 6: Final Message
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
