@@ -17,13 +17,23 @@ async def optimized_download(client, message, file_path, sts):
             return None
         
         file_size = media.file_size
-        file_id = media.file_id
-        file_ref = media.file_reference
         
-        # Get access hash
+        # Get file details using get_messages to access raw attributes
         file_msg = await client.get_messages(message.chat.id, message.id)
-        file_media = file_msg.document or file_msg.video or file_msg.audio
-        access_hash = file_media.access_hash
+        
+        # Determine media type and get raw media object
+        if file_msg.document:
+            raw_media = file_msg.media.document
+        elif file_msg.video:
+            raw_media = file_msg.media.document
+        elif file_msg.audio:
+            raw_media = file_msg.media.document
+        else:
+            return None
+        
+        file_id = raw_media.id
+        access_hash = raw_media.access_hash
+        file_ref = raw_media.file_reference
         
         print(f"🚀 Starting optimized parallel download...")
         
