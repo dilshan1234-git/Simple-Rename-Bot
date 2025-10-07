@@ -12,10 +12,9 @@ class Bot(Client):
             api_id=API_ID,
             api_hash=API_HASH,
             bot_token=BOT_TOKEN,
-            workers=200,  # Increased from 100 for better download performance
+            workers=200,  # Increased from 100 for better performance
             plugins={"root": "main"},
-            sleep_threshold=5,  # Reduced from 10 for faster responses
-            max_concurrent_transmissions=10  # NEW: Allow more concurrent downloads
+            sleep_threshold=5  # Reduced from 10 for faster responses
         )
     
     async def start(self):
