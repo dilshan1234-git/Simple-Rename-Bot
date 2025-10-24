@@ -1,88 +1,96 @@
 import os
 import re
-import asyncio
 import aiofiles
-from pyrogram import Client, filters, enums
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import DOWNLOAD_LOCATION, ADMIN
-from main.downloader.downloader import youtube_link_handler
+from main.downloader import downloader  # Make sure process_url is defined in downloader.py
 
-BATCH_SIZE = 10  # Number of URLs per batch
 
 # /txtdl command
 @Client.on_message(filters.private & filters.command("txtdl") & filters.user(ADMIN))
-async def txt_dl(bot: Client, msg: Message):
-    """Reply to a .txt file with /txtdl to process URLs in batches."""
+async def txtdl(bot, msg):
     if not msg.reply_to_message or not msg.reply_to_message.document:
-        await msg.reply_text("❌ Reply to a .txt file containing YouTube URLs.")
+        await msg.reply_text("❌ Please reply to a .txt file containing URLs.")
         return
 
-    doc = msg.reply_to_message.document
-    if not doc.file_name.endswith(".txt"):
-        await msg.reply_text("❌ File must be a .txt file.")
+    file = msg.reply_to_message.document
+    if not file.file_name.lower().endswith(".txt"):
+        await msg.reply_text("❌ The file must be a .txt file.")
         return
 
-    # Download the txt file
-    file_path = os.path.join(DOWNLOAD_LOCATION, doc.file_name)
-    await bot.download_media(doc, file_path)
+    file_path = os.path.join(DOWNLOAD_LOCATION, file.file_name)
+    await bot.download_media(file, file_path)
 
-    # Read URLs and titles
+    # Count valid URLs
+    async with aiofiles.open(file_path, mode="r", encoding="utf-8") as f:
+        content = await f.read()
+        entries = content.strip().split("\n\n")
+        urls = []
+        for entry in entries:
+            url_match = re.search(r"url\s*-\s*'(https?://.*?)'", entry)
+            if url_match:
+                urls.append(url_match.group(1).strip())
+
+    if not urls:
+        await msg.reply_text("❌ No valid URLs found in the file.")
+        return
+
+    # Create range selection buttons
+    step = 5  # number of URLs per range
+    buttons = []
+    for i in range(0, len(urls), step):
+        start = i
+        end = min(i + step, len(urls))
+        buttons.append([InlineKeyboardButton(f"{start+1}-{end}", callback_data=f"txt_{start}_{end}_{file.file_name}")])
+
+    # Add "Process All" button
+    buttons.append([InlineKeyboardButton("⚡ Process All", callback_data=f"txt_0_{len(urls)}_{file.file_name}")])
+    markup = InlineKeyboardMarkup(buttons)
+
+    await msg.reply_text(
+        f"📄 File processed. Total valid URLs: {len(urls)}\n\n"
+        "🔹 Select the range of URLs to process:",
+        reply_markup=markup
+    )
+
+
+# -----------------------
+# Callback handler for range selection / process all
+# -----------------------
+@Client.on_callback_query(filters.regex(r'^txt_\d+_\d+_'))
+async def txt_range_callback(bot, query):
+    data = query.data.split('_')
+    start, end, file_name = int(data[1]), int(data[2]), '_'.join(data[3:])
+    file_path = os.path.join(DOWNLOAD_LOCATION, file_name)
+
+    # Read URLs and titles again
     urls = []
     titles = []
     async with aiofiles.open(file_path, mode="r", encoding="utf-8") as f:
         content = await f.read()
-        # Regex to match your format
-        matches = re.findall(r"title\s*-\s*'(.*?)'\s*\|\s*.*?\nurl\s*-\s*'(https?://.*?)'", content, re.DOTALL)
-        for title, url in matches:
-            titles.append(title.strip())
-            urls.append(url.strip())
+        entries = content.strip().split("\n\n")
+        for entry in entries:
+            title_match = re.search(r"title\s*-\s*'(.*?)'", entry)
+            url_match = re.search(r"url\s*-\s*'(https?://.*?)'", entry)
+            if title_match and url_match:
+                titles.append(title_match.group(1).strip())
+                urls.append(url_match.group(1).strip())
 
-    total = len(urls)
-    if total == 0:
-        await msg.reply_text("❌ No valid URLs found in the file.")
-        return
-
-    # Build range buttons
-    buttons = []
-    for i in range(0, total, BATCH_SIZE):
-        start = i + 1
-        end = min(i + BATCH_SIZE, total)
-        buttons.append([InlineKeyboardButton(f"{start} - {end}", callback_data=f"txt_{start-1}_{end-1}")])
-    buttons.append([InlineKeyboardButton(f"All ({total})", callback_data=f"txt_0_{total-1}")])
-    markup = InlineKeyboardMarkup(buttons)
-
-    await msg.reply_text(
-        f"✅ Found {total} URLs in the .txt file.\nSelect a range to process:",
-        reply_markup=markup
-    )
-
-    # Save URLs in memory for callback
-    bot.txt_urls_cache = urls
-
-    # Cleanup txt file
-    if os.path.exists(file_path):
-        os.remove(file_path)
-
-
-# Callback handler for range selection
-@Client.on_callback_query(filters.regex(r'^txt_\d+_\d+'))
-async def txt_range_handler(bot: Client, query):
-    data = query.data.split("_")
-    start_idx = int(data[1])
-    end_idx = int(data[2])
-
-    urls = getattr(bot, "txt_urls_cache", [])
     if not urls:
-        await query.message.edit_text("❌ URL cache expired. Please resend the /txtdl command.")
+        await query.message.edit_text("❌ No valid URLs found.")
         return
 
-    batch_urls = urls[start_idx:end_idx+1]
-    await query.message.edit_text(f"🔄 Processing URLs {start_idx+1} to {end_idx+1} ({len(batch_urls)} URLs)...")
+    # Slice the selected range
+    selected_urls = urls[start:end]
+    selected_titles = titles[start:end]
 
-    for url in batch_urls:
-        fake_msg = Message(**{k: getattr(query.message, k) for k in query.message.__slots__})
-        fake_msg.text = url
-        await youtube_link_handler(bot, fake_msg)
-        await asyncio.sleep(1)  # small delay between URLs
+    # Pass each URL & title to downloader.py to handle like normal
+    for title, url in zip(selected_titles, selected_urls):
+        try:
+            await downloader.process_url(bot, query.message.chat.id, url, title)
+        except Exception as e:
+            await bot.send_message(query.message.chat.id, f"❌ Error processing URL:\n{url}\n{str(e)}")
 
-    await query.message.edit_text(f"✅ Finished processing URLs {start_idx+1} to {end_idx+1}.")
+    await query.answer(f"✅ Processing URLs {start+1}-{end}")
+    await query.message.delete()
