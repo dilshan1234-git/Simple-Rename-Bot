@@ -280,10 +280,11 @@ async def yt_callback_handler(bot, query):
         return
 
     # Cleanup files
-    if os.path.exists(downloaded_path):
-        os.remove(downloaded_path)
-    if thumb_path and os.path.exists(thumb_path):
-        os.remove(thumb_path)
+if os.path.exists(downloaded_path):
+    os.remove(downloaded_path)
+if thumb_path and os.path.exists(thumb_path):
+    os.remove(thumb_path)
+
 
 
 # Description handler
