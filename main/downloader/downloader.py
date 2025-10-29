@@ -19,14 +19,10 @@ nest_asyncio.apply()
 STORE_ON_COLAB = False
 
 # /ytdl command
-
-
-@Client.on_message(filters.private & filters.command("ytdl")
-                   & filters.user(ADMIN))
+@Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
     global STORE_ON_COLAB
-    caption_text = YTDL_WELCOME_TEXT.replace(
-        "TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
+    caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
 
     # Create button reflecting current state
     status_icon = "✅" if STORE_ON_COLAB else "❌"
@@ -46,8 +42,7 @@ async def ytdl(bot, msg):
 
 
 # Handle YouTube links
-@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(
-    r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
+@Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
 async def youtube_link_handler(bot, msg):
     url = msg.text.strip()
     processing_message = await msg.reply_text("🔄 **Processing your request...**", parse_mode=enums.ParseMode.MARKDOWN)
@@ -58,12 +53,7 @@ async def youtube_link_handler(bot, msg):
         'quiet': True,
         'no_warnings': True,
         'user_agent': 'Mozilla/5.0',
-        'cookiefile': os.path.join(
-            DOWNLOAD_LOCATION,
-            'cookies.txt') if os.path.exists(
-            os.path.join(
-                DOWNLOAD_LOCATION,
-                'cookies.txt')) else None,
+        'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
         'retries': 10,
         'fragment_retries': 10,
     }
@@ -98,8 +88,7 @@ async def youtube_link_handler(bot, msg):
             filesize = f.get('filesize') or f.get('filesize_approx')
             if filesize:
                 size_str = humanbytes(filesize)
-                available_resolutions.append(
-                    (resolution, size_str, f['format_id']))
+                available_resolutions.append((resolution, size_str, f['format_id']))
         elif f['ext'] in ['m4a', 'webm'] and f.get('acodec') != 'none':
             filesize = f.get('filesize') or f.get('filesize_approx')
             if filesize:
@@ -121,10 +110,7 @@ async def youtube_link_handler(bot, msg):
     buttons = []
     row = []
     for resolution, size, format_id in available_resolutions:
-        row.append(
-            InlineKeyboardButton(
-                f"🎬 {resolution} - {size}",
-                callback_data=f"yt_{format_id}_{resolution}_{url}"))
+        row.append(InlineKeyboardButton(f"🎬 {resolution} - {size}", callback_data=f"yt_{format_id}_{resolution}_{url}"))
         if len(row) == 2:
             buttons.append(row)
             row = []
@@ -133,8 +119,7 @@ async def youtube_link_handler(bot, msg):
     if available_audio:
         highest_audio = max(available_audio, key=lambda x: x[0])
         _, size, format_id = highest_audio
-        buttons.append([InlineKeyboardButton(
-            f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
+        buttons.append([InlineKeyboardButton(f"🎧 Audio - {size}", callback_data=f"audio_{format_id}_{url}")])
     buttons.append([
         InlineKeyboardButton("📝 Description", callback_data=f"desc_{url}"),
         InlineKeyboardButton("🖼️ Thumbnail", callback_data=f"thumb_{url}")
@@ -169,7 +154,7 @@ async def yt_callback_handler(bot, query):
 
     try:
         title = query.message.caption.split('🎞 ')[1].split('\n')[0]
-    except BaseException:
+    except:
         title = "Unknown Title"
 
     # Remove buttons and update caption to show downloading started
@@ -181,11 +166,12 @@ async def yt_callback_handler(bot, query):
 
     # Initialize progress with YTDLProgress using the same message
     progress = YTDLProgress(
-        bot=bot,
-        chat_id=query.message.chat.id,
-        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
-        edit_msg=query.message)
-
+        bot=bot, 
+        chat_id=query.message.chat.id, 
+        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**", 
+        edit_msg=query.message
+    )
+    
     # Start the progress updater
     await progress.start_updater()
 
@@ -245,11 +231,8 @@ async def yt_callback_handler(bot, query):
             try:
                 with Image.open(thumb_path) as img:
                     img_width, img_height = img.size
-                    scale_factor = max(
-                        video_width / img_width,
-                        video_height / img_height)
-                    new_size = (int(img_width * scale_factor),
-                                int(img_height * scale_factor))
+                    scale_factor = max(video_width / img_width, video_height / img_height)
+                    new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
                     img = img.resize(new_size, Image.LANCZOS)
                     left = (img.width - video_width) / 2
                     top = (img.height - video_height) / 2
@@ -296,17 +279,11 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Cleanup files based on Colab toggle
-    if not STORE_ON_COLAB:
+    # Cleanup files
     if os.path.exists(downloaded_path):
         os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
-else:
-    await bot.send_message(
-        query.message.chat.id,
-        "💾 **File Stored on Colab** (Not deleted as per your setting)"
-    )
 
 
 # Description handler
