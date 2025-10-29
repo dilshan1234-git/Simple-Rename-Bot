@@ -10,6 +10,13 @@ YTDL_WELCOME_TEXT = """
  ➭🖼 **Video Thumbnail And Description Support 📄**\n
    
 🔗 **Please Send Your Youtube Links To Start Downloading**
+
+━━━━━━━━━━━━━━━━━━━━━━━
+💾 **Store Option**
+You can toggle the below button to decide where downloads are kept:
+
+➡️ **Store on Colab : ❌ (Disabled)**  
+Press to toggle ✅ or ❌
 """
 
 
