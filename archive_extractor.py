@@ -100,15 +100,21 @@ async def use_colab(bot, query: CallbackQuery):
     user_files[chat_id]["is_collecting"] = False
     user_files[chat_id]["use_colab"] = True
 
-    # List all files in DOWNLOAD_LOCATION
-    colab_files = os.listdir(DOWNLOAD_LOCATION)
+    # Only include files, ignore folders
+    colab_files = [
+        os.path.join(DOWNLOAD_LOCATION, f)
+        for f in os.listdir(DOWNLOAD_LOCATION)
+        if os.path.isfile(os.path.join(DOWNLOAD_LOCATION, f))
+           and f.lower().endswith(('.mp4', '.mkv', '.avi', '.mp3', '.wav', '.flac', '.jpg', '.jpeg', '.png', '.gif', '.pdf', '.docx', '.txt', '.zip'))
+    ]
+
     if not colab_files:
-        await query.message.edit_text("⚠️ No files found in Colab storage.")
+        await query.message.edit_text("⚠️ No valid media files found in Colab storage.")
         return
 
-    user_files[chat_id]["files"] = [os.path.join(DOWNLOAD_LOCATION, f) for f in colab_files]
+    user_files[chat_id]["files"] = colab_files
+    file_list_text = "\n".join([f"`{os.path.basename(f)}`" for f in colab_files])
 
-    file_list_text = "\n".join([f"`{f}`" for f in colab_files])
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm", callback_data="confirm_zip"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
@@ -132,7 +138,6 @@ async def done_collecting(bot, query: CallbackQuery):
         await query.message.edit_text("⚠️ No files were sent to create a ZIP.")
         return
 
-    # Prepare file names with numbering if required
     number_zip = user_files[chat_id].get("number_zip", False)
     file_names = []
     for idx, f in enumerate(files, start=1):
@@ -142,7 +147,7 @@ async def done_collecting(bot, query: CallbackQuery):
             file_name = f"{idx}.{f.video.file_name}" if number_zip else f.video.file_name
         elif hasattr(f, "audio"):
             file_name = f"{idx}.{f.audio.file_name}" if number_zip else f.audio.file_name
-        else:  # For Colab files
+        else:  # Colab files
             file_name = os.path.basename(f)
             if number_zip:
                 file_name = f"{idx}.{file_name}"
@@ -176,7 +181,7 @@ async def confirm_zip(bot, query: CallbackQuery):
         files = user_files[chat_id]["files"]
 
         if use_colab:
-            # Files are already in colab storage
+            # Only write Colab files
             for idx, file_path in enumerate(files, start=1):
                 arc_name = f"{idx}.{os.path.basename(file_path)}" if number_zip else os.path.basename(file_path)
                 archive.write(file_path, arc_name)
