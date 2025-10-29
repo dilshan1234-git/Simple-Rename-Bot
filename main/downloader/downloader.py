@@ -1,4 +1,3 @@
-
 import os
 import time
 import asyncio
@@ -16,31 +15,31 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
-# In-memory toggle state for Colab storage
-STORE_ON_COLAB = False
+# In-memory toggle state per chat
+store_colab_state = {}  # chat_id: True/False
 
 # /ytdl command
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
-    global STORE_ON_COLAB
-    caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
-
-    # Create button reflecting current state
-    status_icon = "✅" if STORE_ON_COLAB else "❌"
+    chat_id = msg.chat.id
+    current_state = store_colab_state.get(chat_id, False)
+    status_icon = "✅" if current_state else "❌"
+    
     store_button = InlineKeyboardButton(
         f"Store on Colab : {status_icon}", callback_data="toggle_colab_store"
     )
-
+    
+    caption_text = YTDL_WELCOME_TEXT.format(store_button_text=f"➡️ Store on Colab : {status_icon} (Click to toggle)")
+    
     markup = InlineKeyboardMarkup([[store_button]])
-
+    
     await bot.send_photo(
-        chat_id=msg.chat.id,
+        chat_id=chat_id,
         photo=TELEGRAPH_IMAGE_URL,
         caption=caption_text,
         parse_mode=enums.ParseMode.MARKDOWN,
         reply_markup=markup
     )
-
 
 # Handle YouTube links
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.regex(r'https?://(www\.)?(youtube\.com|youtu\.be)/(watch\?v=|shorts/)'))
@@ -281,7 +280,9 @@ async def yt_callback_handler(bot, query):
         return
 
     # Cleanup files based on Colab toggle
-    if not STORE_ON_COLAB:
+    current_state = store_colab_state.get(query.message.chat.id, False)
+
+    if not current_state:
         if os.path.exists(downloaded_path):
             os.remove(downloaded_path)
     if thumb_path and os.path.exists(thumb_path):
@@ -318,3 +319,19 @@ async def thumb_callback_handler(bot, query):
         os.remove(thumb_path)
     else:
         await query.message.edit_text("❌ **Failed to download thumbnail.**")
+
+@Client.on_callback_query(filters.regex(r'^toggle_colab_store$'))
+async def toggle_store_colab(bot, query):
+    chat_id = query.message.chat.id
+    current_state = store_colab_state.get(chat_id, False)
+    new_state = not current_state
+    store_colab_state[chat_id] = new_state
+    
+    # Update button text dynamically
+    status_icon = "✅" if new_state else "❌"
+    new_button = InlineKeyboardButton(f"Store on Colab : {status_icon}", callback_data="toggle_colab_store")
+    markup = InlineKeyboardMarkup([[new_button]])
+    
+    await query.message.edit_reply_markup(markup)
+    await query.answer(f"Store on Colab set to {'ON' if new_state else 'OFF'}")
+
