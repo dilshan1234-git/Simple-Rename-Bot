@@ -4,6 +4,7 @@ import asyncio
 import requests
 import yt_dlp as youtube_dl
 from pyrogram import Client, filters, enums
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from moviepy.editor import VideoFileClip
 from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
@@ -14,16 +15,29 @@ import nest_asyncio
 
 nest_asyncio.apply()
 
+# In-memory toggle state for Colab storage
+STORE_ON_COLAB = False
 
 # /ytdl command
 @Client.on_message(filters.private & filters.command("ytdl") & filters.user(ADMIN))
 async def ytdl(bot, msg):
+    global STORE_ON_COLAB
     caption_text = YTDL_WELCOME_TEXT.replace("TELEGRAPH_IMAGE_URL", TELEGRAPH_IMAGE_URL)
+
+    # Create button reflecting current state
+    status_icon = "✅" if STORE_ON_COLAB else "❌"
+    store_button = InlineKeyboardButton(
+        f"Store on Colab : {status_icon}", callback_data="toggle_colab_store"
+    )
+
+    markup = InlineKeyboardMarkup([[store_button]])
+
     await bot.send_photo(
         chat_id=msg.chat.id,
         photo=TELEGRAPH_IMAGE_URL,
         caption=caption_text,
-        parse_mode=enums.ParseMode.MARKDOWN
+        parse_mode=enums.ParseMode.MARKDOWN,
+        reply_markup=markup
     )
 
 
