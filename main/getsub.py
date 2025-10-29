@@ -1,4 +1,7 @@
-import os, time, json, subprocess
+import os
+import time
+import json
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -7,7 +10,9 @@ from main.utils import progress_message, humanbytes
 # Temporary storage for ongoing requests
 sub_extract_store = {}
 
-@Client.on_message(filters.private & filters.command("getsub") & filters.user(ADMIN))
+
+@Client.on_message(filters.private & filters.command("getsub")
+                   & filters.user(ADMIN))
 async def get_subtitles(bot, msg):
     reply = msg.reply_to_message
     if not reply or not (reply.video or reply.document):
@@ -38,7 +43,11 @@ async def get_subtitles(bot, msg):
             "ffprobe", "-v", "quiet", "-print_format", "json",
             "-show_streams", "-select_streams", "s", downloaded
         ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True)
         streams = json.loads(result.stdout).get("streams", [])
     except Exception as e:
         await sts.edit(f"⚠️ Error reading subtitle info: {e}")
@@ -118,8 +127,18 @@ async def sub_callbacks(bot, query: CallbackQuery):
                     f"{os.path.splitext(info['file_name'])[0]}.{lang}.{ext}"
                 )
 
-                cmd = ["ffmpeg", "-y", "-i", info["path"], "-map", f"0:s:{idx}", out_file]
-                subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    info["path"],
+                    "-map",
+                    f"0:s:{idx}",
+                    out_file]
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE)
 
                 # verify file exists and > 0
                 if os.path.exists(out_file) and os.path.getsize(out_file) > 0:

@@ -12,6 +12,8 @@ from main.downloader.ytdl_text import VID_TRIMMER_TEXT
 trim_data = {}
 
 # ⏰ Convert HH:MM:SS → seconds
+
+
 def hms_to_seconds(hms: str):
     parts = hms.strip().split(":")
     parts = [int(p) for p in parts]
@@ -21,6 +23,8 @@ def hms_to_seconds(hms: str):
     return h * 3600 + m * 60 + s
 
 # ⏳ Convert seconds → HH:MM:SS
+
+
 def seconds_to_hms(s: int):
     h = s // 3600
     m = (s % 3600) // 60
@@ -29,7 +33,8 @@ def seconds_to_hms(s: int):
 
 
 # 🎬 Trim command
-@Client.on_message(filters.private & filters.command("trim") & filters.user(ADMIN))
+@Client.on_message(filters.private & filters.command("trim")
+                   & filters.user(ADMIN))
 async def start_trim_process(bot, msg):
     chat_id = msg.chat.id
     trim_data[chat_id] = {}
@@ -42,7 +47,8 @@ async def start_trim_process(bot, msg):
 
 
 # 📥 Receive video/document
-@Client.on_message(filters.private & (filters.video | filters.document) & filters.user(ADMIN))
+@Client.on_message(filters.private & (filters.video |
+                   filters.document) & filters.user(ADMIN))
 async def trim_receive_media(bot, msg):
     chat_id = msg.chat.id
     if chat_id not in trim_data:
@@ -103,7 +109,8 @@ async def trim_receive_times(bot, msg):
 
 
 # ❌ Cancel trim
-@Client.on_callback_query(filters.regex(r"^trim_cancel:") & filters.user(ADMIN))
+@Client.on_callback_query(filters.regex(r"^trim_cancel:")
+                          & filters.user(ADMIN))
 async def trim_cancel(bot, cb):
     chat_id = int(cb.data.split(":")[1])
     trim_data.pop(chat_id, None)
@@ -112,7 +119,8 @@ async def trim_cancel(bot, cb):
 
 
 # ✅ Confirm trim → download → trim → upload
-@Client.on_callback_query(filters.regex(r"^trim_confirm:") & filters.user(ADMIN))
+@Client.on_callback_query(filters.regex(r"^trim_confirm:")
+                          & filters.user(ADMIN))
 async def trim_confirm(bot, cb):
     chat_id = int(cb.data.split(":")[1])
     state = trim_data.get(chat_id)
@@ -126,7 +134,9 @@ async def trim_confirm(bot, cb):
     start_hms, end_hms = state["start_hms"], state["end_hms"]
 
     sts = await cb.message.edit_text("📥 Downloading your file...")
-    download_path = os.path.join(DOWNLOAD_LOCATION, f"trim_{chat_id}_{int(time.time())}{os.path.splitext(orig_name)[1]}")
+    download_path = os.path.join(
+        DOWNLOAD_LOCATION,
+        f"trim_{chat_id}_{int(time.time())}{os.path.splitext(orig_name)[1]}")
 
     c_time = time.time()
     try:
@@ -141,10 +151,18 @@ async def trim_confirm(bot, cb):
     # 🔹 Extract real thumbnail from downloaded video using ffmpeg
     thumb_path = os.path.join(DOWNLOAD_LOCATION, f"thumb_{chat_id}.jpg")
     try:
-        subprocess.run([
-            "ffmpeg", "-y", "-i", downloaded, "-ss", "00:00:01", "-vframes", "1", thumb_path
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    except:
+        subprocess.run(["ffmpeg",
+                        "-y",
+                        "-i",
+                        downloaded,
+                        "-ss",
+                        "00:00:01",
+                        "-vframes",
+                        "1",
+                        thumb_path],
+                       stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL)
+    except BaseException:
         thumb_path = None
 
     # Paths
@@ -160,10 +178,14 @@ async def trim_confirm(bot, cb):
         "-c", "copy",
         out_path
     ]
-    success = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+    success = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL).returncode == 0
 
     # fallback re-encode
-    if not success or not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+    if not success or not os.path.exists(
+            out_path) or os.path.getsize(out_path) == 0:
         await sts.edit("⚠️ Fast trim failed. Retrying with re-encode...")
         cmd = [
             "ffmpeg", "-y",
@@ -173,7 +195,10 @@ async def trim_confirm(bot, cb):
             "-c:a", "aac", "-b:a", "128k",
             out_path
         ]
-        success = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        success = subprocess.run(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL).returncode == 0
 
     if not success:
         return await sts.edit("❌ Trimming failed!")
@@ -200,7 +225,7 @@ async def trim_confirm(bot, cb):
         try:
             if f and os.path.exists(f):
                 os.remove(f)
-        except:
+        except BaseException:
             pass
 
     await sts.delete()

@@ -1,4 +1,7 @@
-import os, time, asyncio, subprocess
+import os
+import time
+import asyncio
+import subprocess
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
@@ -13,6 +16,8 @@ MERGE_STATE = {}  # { chat_id: { "media_msg": Message, "stage": "await_sub", "su
 os.makedirs(DOWNLOAD_LOCATION, exist_ok=True)
 
 # Custom filter: only accept a subtitle document while we are waiting for it
+
+
 def _awaiting_subtitle(_, __, msg):
     try:
         return (
@@ -24,13 +29,15 @@ def _awaiting_subtitle(_, __, msg):
     except Exception:
         return False
 
+
 awaiting_subtitle = create(_awaiting_subtitle)
 
 
 # ─────────────────────────
 # Step 1: /merge (must reply to a video or document)
 # ─────────────────────────
-@Client.on_message(filters.private & filters.command("merge") & filters.user(ADMIN))
+@Client.on_message(filters.private & filters.command("merge")
+                   & filters.user(ADMIN))
 async def merge_start(bot, msg):
     reply = msg.reply_to_message
     if not reply:
@@ -40,7 +47,8 @@ async def merge_start(bot, msg):
     if not media:
         return await msg.reply_text("⚠️ Unsupported message. Reply to a **video/document** and use `/merge`.")
 
-    MERGE_STATE[msg.chat.id] = {"media_msg": reply, "stage": "await_sub", "subtitle_msg": None}
+    MERGE_STATE[msg.chat.id] = {"media_msg": reply,
+                                "stage": "await_sub", "subtitle_msg": None}
 
     filename = media.file_name or "unnamed"
     filesize = humanbytes(media.file_size)
@@ -80,7 +88,7 @@ async def subtitle_receive(bot, msg):
         reply_markup=InlineKeyboardMarkup(
             [[
                 InlineKeyboardButton("✅ Confirm", callback_data=f"sm_confirm:{chat_id}"),
-                InlineKeyboardButton("❌ Cancel",  callback_data=f"sm_cancel:{chat_id}")
+                InlineKeyboardButton("❌ Cancel", callback_data=f"sm_cancel:{chat_id}")
             ]]
         )
     )
@@ -89,7 +97,8 @@ async def subtitle_receive(bot, msg):
 # ─────────────────────────
 # Step 3: callbacks (unique sm_ prefix)
 # ─────────────────────────
-@Client.on_callback_query(filters.regex(r"^sm_(confirm|cancel):(-?\d+)$") & filters.user(ADMIN))
+@Client.on_callback_query(filters.regex(r"^sm_(confirm|cancel):(-?\d+)$")
+                          & filters.user(ADMIN))
 async def merge_cb(bot, query: CallbackQuery):
     action, chat_id_str = query.data.split(":")
     chat_id = int(chat_id_str)
@@ -135,14 +144,16 @@ async def merge_cb(bot, query: CallbackQuery):
     output_path = os.path.join(DOWNLOAD_LOCATION, f"{base_name}_merged{ext}")
 
     sub_ext = os.path.splitext(sub_path)[1].lower()
-    new_sub_codec = "ass" if sub_ext in [".srt", ".vtt"] else sub_ext.replace(".", "")
+    new_sub_codec = "ass" if sub_ext in [
+        ".srt", ".vtt"] else sub_ext.replace(".", "")
 
     # FFmpeg command → keep all existing streams, add new subtitle safely
     cmd = [
         "ffmpeg", "-y",
         "-i", main_path,
         "-i", sub_path,
-        "-map", "0",              # all streams from main (video, audio, subs, chapters, attachments)
+        # all streams from main (video, audio, subs, chapters, attachments)
+        "-map", "0",
         "-map", "1:0",            # only the new subtitle
         "-c:v", "copy",
         "-c:a", "copy",
@@ -162,10 +173,17 @@ async def merge_cb(bot, query: CallbackQuery):
     # Generate thumbnail
     thumb_path = os.path.join(DOWNLOAD_LOCATION, f"{base_name}_thumb.jpg")
     try:
-        subprocess.run(
-            ["ffmpeg", "-y", "-i", output_path, "-ss", "00:00:02", "-vframes", "1", thumb_path],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
+        subprocess.run(["ffmpeg",
+                        "-y",
+                        "-i",
+                        output_path,
+                        "-ss",
+                        "00:00:02",
+                        "-vframes",
+                        "1",
+                        thumb_path],
+                       stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE)
         if not os.path.exists(thumb_path):
             thumb_path = None
     except Exception:
@@ -195,7 +213,7 @@ async def merge_cb(bot, query: CallbackQuery):
         if os.path.exists(main_path):
             os.remove(main_path)
         # ❌ keep output_path permanently
-    except:
+    except BaseException:
         pass
 
     await query.message.delete()

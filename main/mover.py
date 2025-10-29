@@ -8,7 +8,9 @@ from IPython.display import display, Javascript
 ARCHIVE_EXTRACTOR_SRC = "/content/Simple-Rename-Bot/archive_extractor.py"
 ARCHIVE_EXTRACTOR_DEST = "/content/Simple-Rename-Bot/main/archive_extractor.py"
 
-@Client.on_message(filters.private & filters.command("move") & filters.user(ADMIN))
+
+@Client.on_message(filters.private & filters.command("move")
+                   & filters.user(ADMIN))
 async def move_archive_extractor(bot, msg):
     # Move archive_extractor.py to the main directory
     if os.path.exists(ARCHIVE_EXTRACTOR_SRC):
@@ -17,6 +19,7 @@ async def move_archive_extractor(bot, msg):
 
         # Stop the current running cell and restart
         await stop_and_rerun()
+
 
 async def stop_and_rerun():
     # Stop the current cell and trigger a rerun

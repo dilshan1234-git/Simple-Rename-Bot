@@ -2,6 +2,8 @@ import yt_dlp
 from pyrogram import Client, filters
 
 # Extracts video URLs from YouTube playlists
+
+
 def extract_playlist(playlist_url):
     ydl_opts = {
         'quiet': True,
@@ -11,6 +13,7 @@ def extract_playlist(playlist_url):
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         playlist_info = ydl.extract_info(playlist_url, download=False)
         return playlist_info
+
 
 @Client.on_message(filters.private & filters.command("playlist"))
 async def extract_playlist_url(bot, msg):
@@ -35,7 +38,7 @@ async def extract_playlist_url(bot, msg):
         playlist_info = extract_playlist(playlist_url)
         if not playlist_info.get("entries"):
             return await sts.edit("❌ No videos found in the playlist.")
-        
+
         playlist_name = playlist_info.get("title", "Untitled Playlist")
         video_entries = playlist_info["entries"]
 
@@ -43,14 +46,19 @@ async def extract_playlist_url(bot, msg):
         for i, entry in enumerate(video_entries, start=1):
             video_title = entry.get("title", "Untitled Video")
             video_url = entry.get("url", "")
-            video_list.append(f"{i}. 🎬 **{video_title}**\n\n📎URL = `{video_url}`")  # Monospace for the URL
+            # Monospace for the URL
+            video_list.append(
+                f"{i}. 🎬 **{video_title}**\n\n📎URL = `{video_url}`")
 
-        # Split the video list into chunks of 20 and send them as separate messages
+        # Split the video list into chunks of 20 and send them as separate
+        # messages
         chunk_size = 20
         for idx in range(0, len(video_list), chunk_size):
-            chunk = video_list[idx:idx+chunk_size]
-            message = f"📃 Playlist: **{playlist_name}**\n\n" + "\n\n".join(chunk)
-            await bot.send_message(msg.chat.id, message)  # No parse_mode specified
+            chunk = video_list[idx:idx + chunk_size]
+            message = f"📃 Playlist: **{playlist_name}**\n\n" + \
+                "\n\n".join(chunk)
+            # No parse_mode specified
+            await bot.send_message(msg.chat.id, message)
 
         # Final message showing all URLs processed
         await msg.reply_text(f"✅ All URLs processed! {len(video_entries)} videos found.")

@@ -12,6 +12,7 @@ YOUTUBE_API_KEY = "AIzaSyDp0oGuQ35JDAW6HBJCg3OBviIlWzLXTn4"
 # Initialize YouTube API client
 youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
 
+
 def format_duration(duration):
     duration_obj = isodate.parse_duration(duration)
     total_seconds = int(duration_obj.total_seconds())
@@ -25,6 +26,7 @@ def format_duration(duration):
     else:
         return f"{seconds}s"
 
+
 def extract_channel_info(url):
     """Extract the channel handle or ID from a YouTube channel URL."""
     print(f"Extracting channel info from URL: {url}")  # Debug log
@@ -35,9 +37,10 @@ def extract_channel_info(url):
     elif '@' in url:  # New YouTube handle format
         match = re.search(r'@([^/?]+)', url)
         channel_id = match.group(1) if match else None
-    
+
     print(f"Extracted channel ID or handle: {channel_id}")  # Debug log
     return channel_id
+
 
 @Client.on_inline_query()
 async def youtube_search(bot, query):
@@ -50,7 +53,8 @@ async def youtube_search(bot, query):
         if channel_id_or_handle:
             try:
                 # Fetch the channel using search().list with the handle or ID
-                print(f"Fetching channel details for: {channel_id_or_handle}")  # Debug log
+                # Debug log
+                print(f"Fetching channel details for: {channel_id_or_handle}")
                 channel_response = youtube.search().list(
                     q=channel_id_or_handle,  # Search using the handle or ID
                     type='channel',
@@ -83,8 +87,7 @@ async def youtube_search(bot, query):
                             description="Channel Videos",
                             thumb_url=channel_icon,
                             input_message_content=InputTextMessageContent(f"Channel: {channel_title}"),
-                        )
-                    )
+                        ))
 
                     # Add videos from the channel (latest to oldest)
                     for item in video_response.get('items', []):
@@ -113,8 +116,7 @@ async def youtube_search(bot, query):
                                 thumb_url=thumbnail,
                                 input_message_content=InputTextMessageContent(video_url),
                                 url=video_url,
-                            )
-                        )
+                            ))
 
                     await query.answer(results, cache_time=0)
                 else:

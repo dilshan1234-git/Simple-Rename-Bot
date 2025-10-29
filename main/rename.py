@@ -1,10 +1,13 @@
-import time, os
+import time
+import os
 from pyrogram import Client, filters, enums
 from config import DOWNLOAD_LOCATION, CAPTION, ADMIN
 from main.utils import progress_message, humanbytes
 from moviepy.editor import VideoFileClip
 
-@Client.on_message(filters.private & filters.command("rename") & filters.user(ADMIN))
+
+@Client.on_message(filters.private & filters.command("rename")
+                   & filters.user(ADMIN))
 async def rename_file(bot, msg):
     reply = msg.reply_to_message
     if len(msg.command) < 2 or not reply:
@@ -26,7 +29,10 @@ async def rename_file(bot, msg):
 
     if CAPTION:
         try:
-            cap = CAPTION.format(file_name=new_name, file_size=filesize, duration=duration)
+            cap = CAPTION.format(
+                file_name=new_name,
+                file_size=filesize,
+                duration=duration)
         except Exception as e:
             return await sts.edit(text=f"Your caption Error: unexpected keyword ●> ({e})")
     else:
@@ -49,4 +55,3 @@ async def rename_file(bot, msg):
         await bot.send_video(msg.chat.id, video=downloaded, thumb=og_thumbnail, caption=cap, duration=duration, progress=progress_message, progress_args=("Upload Started..... **Thanks To All Who Supported ❤**", sts, c_time))
     except Exception as e:
         return await sts.edit(f"Error: {e}")
-    

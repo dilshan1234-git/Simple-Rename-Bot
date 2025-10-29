@@ -15,6 +15,8 @@ from pyrogram.errors import MessageNotModified
 callback_data_store = {}
 
 # Function to download Dailymotion videos
+
+
 def download_dailymotion(url):
     ydl_opts = {
         'format': 'best',
@@ -34,10 +36,12 @@ def download_dailymotion(url):
         return file_path, video_title, duration, file_size, resolution, thumbnail_url
 
 # Function to extract audio streams from video
+
+
 async def extract_audio(video_path, video_title, sts, bot, msg):
     extract_dir = os.path.dirname(video_path) + "/extract"
     os.makedirs(extract_dir, exist_ok=True)
-    
+
     video_streams_data = ffmpeg.probe(video_path)
     audios = []
     audio_duration = 0
@@ -75,6 +79,8 @@ async def extract_audio(video_path, video_title, sts, bot, msg):
         await sts.edit(f"❌ Failed to extract audio from {video_title}")
 
 # Function to generate thumbnail from video
+
+
 def generate_thumbnail(video_path):
     thumbnail_path = f"{video_path}_thumbnail.jpg"
     try:
@@ -87,6 +93,8 @@ def generate_thumbnail(video_path):
         return None
 
 # Function to download thumbnail from a URL
+
+
 def download_thumbnail(thumbnail_url, title):
     if not thumbnail_url:
         return None
@@ -99,6 +107,8 @@ def download_thumbnail(thumbnail_url, title):
     return None
 
 # Function to extract and download images from a Facebook post
+
+
 def download_facebook_images(url):
     ydl_opts = {
         'quiet': True,
@@ -108,19 +118,22 @@ def download_facebook_images(url):
     }
     with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=False)
-        image_urls = [entry['url'] for entry in info.get('entries', []) if entry.get('url')]
+        image_urls = [entry['url']
+                      for entry in info.get('entries', []) if entry.get('url')]
         return image_urls
 
-@Client.on_message(filters.private & filters.command("dailydl") & filters.user(ADMIN))
+
+@Client.on_message(filters.private &
+                   filters.command("dailydl") & filters.user(ADMIN))
 async def dailymotion_facebook_download(bot, msg):
     reply = msg.reply_to_message
     if not reply or not reply.text:
         return await msg.reply_text("Please reply to a message containing one or more Dailymotion or Facebook video URLs.")
-    
+
     urls = reply.text.split()
     if not urls:
         return await msg.reply_text("Please provide valid Dailymotion or Facebook URLs.")
-    
+
     # Check for Facebook images
     if "facebook.com" in urls[0]:
         try:
@@ -136,7 +149,7 @@ async def dailymotion_facebook_download(bot, msg):
                 await msg.reply_text("❌ No images found in the post.")
         except Exception as e:
             await msg.reply_text(f"❌ Failed to extract images. Error: {str(e)}")
-    
+
     # Ask for method
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("With Extract Audio 🎬🎧", callback_data="with_audio")],
@@ -166,7 +179,8 @@ async def process_dailymotion_download(bot, msg, urls, method):
             downloading_message = await msg.reply_text("📥 Starting download... 🔄")
             c_time = time.time()
 
-            downloaded, video_title, duration, file_size, resolution, thumbnail_url = download_dailymotion(url)
+            downloaded, video_title, duration, file_size, resolution, thumbnail_url = download_dailymotion(
+                url)
             human_size = humanbytes(file_size)
 
             # Update download progress safely

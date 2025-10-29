@@ -9,6 +9,7 @@ from PIL import Image
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
+
 @Client.on_callback_query(filters.regex(r'^audio_(.+?)_(.+)$'))
 async def audio_callback_handler(bot, query):
     format_id = query.data.split('_')[1]  # Extract format_id

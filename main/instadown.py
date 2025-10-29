@@ -20,10 +20,12 @@ DOWNLOAD_FOLDER = VIDEO_FOLDER  # For yt-dlp downloads
 # ----------------------
 # Google Colab style cookie setup
 # ----------------------
-COOKIE_JSON = "/content/Simple-Rename-Bot/main/cookies.json"  # JSON exported from browser
+# JSON exported from browser
+COOKIE_JSON = "/content/Simple-Rename-Bot/main/cookies.json"
 COOKIE_FILE_TXT = "/content/cookies.txt"
 os.makedirs(DOWNLOAD_FOLDER, exist_ok=True)
 os.makedirs(ALBUM_FOLDER, exist_ok=True)
+
 
 def convert_json_to_netscape(json_file, output_file):
     """Convert JSON cookies to Netscape format for compatibility"""
@@ -47,7 +49,8 @@ def convert_json_to_netscape(json_file, output_file):
             value = c.get("value")
             if name and value:
                 value = value.replace("\n", "")
-                line = "\t".join([domain, tailmatch, path, secure, expires, name, value])
+                line = "\t".join(
+                    [domain, tailmatch, path, secure, expires, name, value])
                 lines.append(line)
 
         with open(output_file, "w", encoding="utf-8") as f:
@@ -58,6 +61,7 @@ def convert_json_to_netscape(json_file, output_file):
     except Exception as e:
         print(f"❌ Error converting cookies: {e}")
 
+
 # Convert cookies on startup
 if os.path.exists(COOKIE_JSON):
     convert_json_to_netscape(COOKIE_JSON, COOKIE_FILE_TXT)
@@ -67,24 +71,34 @@ else:
 # ----------------------
 # In-memory state
 # ----------------------
-INSTADL_STATE = {}  # chat_id -> dict { step, last_msgs: [msg_id,...], data: {...} }
+# chat_id -> dict { step, last_msgs: [msg_id,...], data: {...} }
+INSTADL_STATE = {}
 
 # ----------------------
 # Helper functions
 # ----------------------
-async def send_clean(bot, chat_id, text, reply_markup=None, reply_to_message_id=None):
+
+
+async def send_clean(
+        bot,
+        chat_id,
+        text,
+        reply_markup=None,
+        reply_to_message_id=None):
     """Send a message and track it for cleanup"""
     msg = await bot.send_message(
-        chat_id, 
-        text, 
-        reply_markup=reply_markup, 
+        chat_id,
+        text,
+        reply_markup=reply_markup,
         reply_to_message_id=reply_to_message_id
     )
-    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
+    st = INSTADL_STATE.setdefault(
+        chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["last_msgs"].append(msg.id)
     if len(st["last_msgs"]) > 8:
         st["last_msgs"].pop(0)
     return msg
+
 
 async def cleanup_old(bot, chat_id):
     """Delete old tracked messages"""
@@ -97,6 +111,7 @@ async def cleanup_old(bot, chat_id):
         except Exception as e:
             print(f"Could not delete message {mid}: {e}")
     st["last_msgs"] = []
+
 
 def extract_shortcode(url: str):
     """Extract Instagram shortcode from URL"""
@@ -115,7 +130,10 @@ def extract_shortcode(url: str):
 # ----------------------
 # /instadl command
 # ----------------------
-@Client.on_message(filters.private & filters.command("instadl") & filters.user(ADMIN))
+
+
+@Client.on_message(filters.private &
+                   filters.command("instadl") & filters.user(ADMIN))
 async def instadl_start(bot, msg):
     """Start Instagram download flow"""
     replied = msg.reply_to_message
@@ -129,37 +147,37 @@ async def instadl_start(bot, msg):
 
     chat_id = msg.chat.id
     INSTADL_STATE[chat_id] = {
-        "step": "choose", 
-        "last_msgs": [], 
+        "step": "choose",
+        "last_msgs": [],
         "data": {"url": url, "shortcode": shortcode}
     }
 
-    kb = InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("🖼 Album (images)", callback_data="insta_album"),
-                InlineKeyboardButton("🎞 Video / Reel", callback_data="insta_video")
-            ]
-        ]
-    )
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🖼 Album (images)",
+                                                     callback_data="insta_album"),
+                                InlineKeyboardButton("🎞 Video / Reel",
+                                                     callback_data="insta_video")]])
     await cleanup_old(bot, chat_id)
     await send_clean(
-        bot, 
-        chat_id, 
-        "Select your download method:", 
-        reply_markup=kb, 
+        bot,
+        chat_id,
+        "Select your download method:",
+        reply_markup=kb,
         reply_to_message_id=msg.id
     )
 
 # ----------------------
 # Callback handler
 # ----------------------
-@Client.on_callback_query(filters.user(ADMIN) & filters.regex(r"^insta_(album|video)$"))
+
+
+@Client.on_callback_query(filters.user(ADMIN) &
+                          filters.regex(r"^insta_(album|video)$"))
 async def instadl_cb(bot, cq):
     """Handle download method selection"""
     choice = cq.data.split("_")[1]
     chat_id = cq.message.chat.id
-    st = INSTADL_STATE.setdefault(chat_id, {"last_msgs": [], "data": {}, "step": None})
+    st = INSTADL_STATE.setdefault(
+        chat_id, {"last_msgs": [], "data": {}, "step": None})
     st["data"]["choice"] = choice
 
     try:
@@ -177,6 +195,8 @@ async def instadl_cb(bot, cq):
 # ----------------------
 # Album download
 # ----------------------
+
+
 async def handle_album_download(bot, chat_id):
     """Download Instagram album/carousel images"""
     st = INSTADL_STATE[chat_id]
@@ -184,7 +204,7 @@ async def handle_album_download(bot, chat_id):
 
     # Clean album folder
     for f in os.listdir(ALBUM_FOLDER):
-        try: 
+        try:
             os.remove(os.path.join(ALBUM_FOLDER, f))
         except Exception as e:
             print(f"Error removing {f}: {e}")
@@ -192,20 +212,20 @@ async def handle_album_download(bot, chat_id):
     msg = await send_clean(bot, chat_id, "📥 Initializing download...")
 
     L = instaloader.Instaloader(
-        download_videos=False, 
-        download_video_thumbnails=False, 
+        download_videos=False,
+        download_video_thumbnails=False,
         dirname_pattern=ALBUM_FOLDER
     )
-    
+
     # Load cookies and configure session
     try:
         L.context._session.cookies.clear()
-        
+
         if not os.path.exists(COOKIE_FILE_TXT):
             await msg.edit(f"❌ Cookie file not found: {COOKIE_FILE_TXT}")
             INSTADL_STATE.pop(chat_id, None)
             return
-        
+
         # Load cookies
         cookie_count = 0
         with open(COOKIE_FILE_TXT, "r", encoding="utf-8") as f:
@@ -223,7 +243,7 @@ async def handle_album_download(bot, chat_id):
                     name, value, domain=domain, path=path, secure=secure
                 )
                 cookie_count += 1
-        
+
         # Add essential headers to session
         L.context._session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -239,9 +259,9 @@ async def handle_album_download(bot, chat_id):
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-origin',
         })
-        
+
         print(f"✅ Loaded {cookie_count} cookies successfully")
-        
+
     except Exception as e:
         await msg.edit(f"❌ Failed to load cookies: {e}")
         INSTADL_STATE.pop(chat_id, None)
@@ -251,7 +271,8 @@ async def handle_album_download(bot, chat_id):
     try:
         await msg.edit("📥 Fetching post information...")
         post = instaloader.Post.from_shortcode(L.context, shortcode)
-        sidecar = list(post.get_sidecar_nodes()) if post.typename == 'GraphSidecar' else [post]
+        sidecar = list(post.get_sidecar_nodes()
+                       ) if post.typename == 'GraphSidecar' else [post]
         total = len(sidecar)
         await msg.edit(f"📥 Found {total} image(s). Starting download...")
     except Exception as e:
@@ -262,20 +283,21 @@ async def handle_album_download(bot, chat_id):
     # Download and upload images
     downloaded_files = []
     import requests
-    
+
     for i, node in enumerate(sidecar, 1):
         filename = os.path.join(ALBUM_FOLDER, f"image_{i}.jpg")
-        
+
         try:
             await msg.edit(f"📥 Downloading image {i}/{total}...")
-            
+
             # Use direct download with cookies (more reliable than instaloader)
             session = requests.Session()
-            
+
             # Copy cookies from instaloader session to requests session
             for cookie in L.context._session.cookies:
-                session.cookies.set(cookie.name, cookie.value, domain=cookie.domain)
-            
+                session.cookies.set(
+                    cookie.name, cookie.value, domain=cookie.domain)
+
             headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
                 'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
@@ -285,32 +307,34 @@ async def handle_album_download(bot, chat_id):
                 'Sec-Fetch-Mode': 'no-cors',
                 'Sec-Fetch-Site': 'same-origin',
             }
-            
+
             # Download image
-            response = session.get(node.display_url, headers=headers, timeout=30)
+            response = session.get(
+                node.display_url, headers=headers, timeout=30)
             response.raise_for_status()
-            
+
             # Save to file
             with open(filename, "wb") as f:
                 f.write(response.content)
-            
+
             # Verify file was downloaded
             if not os.path.exists(filename):
                 raise Exception("File not created")
-            
+
             file_size = os.path.getsize(filename)
             if file_size == 0:
                 raise Exception("Empty file downloaded")
-            
+
             if file_size < 1000:
-                raise Exception(f"File too small ({file_size} bytes), likely an error page")
-                
+                raise Exception(
+                    f"File too small ({file_size} bytes), likely an error page")
+
             print(f"✅ Downloaded image {i}: {filename} ({file_size} bytes)")
             downloaded_files.append(filename)
-            
+
             # Small delay to avoid rate limiting
             await asyncio.sleep(1)
-            
+
         except Exception as e:
             print(f"❌ Error downloading image {i}: {e}")
             error_msg = str(e)
@@ -329,29 +353,29 @@ async def handle_album_download(bot, chat_id):
         return
 
     await msg.edit(f"📤 Uploading {len(downloaded_files)} image(s)...")
-    
+
     uploaded_count = 0
     for i, filepath in enumerate(downloaded_files, 1):
         try:
             await msg.edit(f"📤 Uploading image {i}/{len(downloaded_files)}...")
-            
+
             file_size = humanbytes(os.path.getsize(filepath))
             caption = f"Image {i}/{len(downloaded_files)}\n💽 Size: {file_size}"
-            
+
             await bot.send_document(
-                chat_id, 
-                document=filepath, 
+                chat_id,
+                document=filepath,
                 caption=caption
             )
             uploaded_count += 1
             print(f"✅ Uploaded image {i}")
-            
+
             # Clean up uploaded file
             try:
                 os.remove(filepath)
             except Exception as e:
                 print(f"Warning: Could not delete {filepath}: {e}")
-                
+
         except Exception as e:
             print(f"❌ Error uploading image {i}: {e}")
             await msg.edit(f"⚠️ Failed to upload image {i}/{len(downloaded_files)}: {e}")
@@ -362,26 +386,28 @@ async def handle_album_download(bot, chat_id):
         await msg.edit(f"✅ Successfully uploaded all {uploaded_count} images!")
     else:
         await msg.edit(f"⚠️ Uploaded {uploaded_count}/{len(downloaded_files)} images. Some failed.")
-    
+
     # Clean up any remaining files
     for f in os.listdir(ALBUM_FOLDER):
         try:
             os.remove(os.path.join(ALBUM_FOLDER, f))
-        except:
+        except BaseException:
             pass
-    
+
     # Keep final message for 5 seconds then clean up
     await asyncio.sleep(5)
     try:
         await msg.delete()
-    except:
+    except BaseException:
         pass
-    
+
     INSTADL_STATE.pop(chat_id, None)
 
 # ----------------------
 # Video/reel download
 # ----------------------
+
+
 async def handle_video_download(bot, chat_id):
     """Download Instagram video or reel"""
     st = INSTADL_STATE[chat_id]
@@ -413,13 +439,18 @@ async def handle_video_download(bot, chat_id):
         """Progress hook for yt-dlp downloads"""
         try:
             if d.get("status") == "downloading":
-                total_bytes = d.get("total_bytes") or d.get("total_bytes_estimate")
+                total_bytes = d.get("total_bytes") or d.get(
+                    "total_bytes_estimate")
                 downloaded_bytes = d.get("downloaded_bytes", 0)
-                percent = int(downloaded_bytes / total_bytes * 100) if total_bytes else 0
+                percent = int(
+                    downloaded_bytes /
+                    total_bytes *
+                    100) if total_bytes else 0
                 text = f"📥 Downloading video: {os.path.basename(d.get('filename',''))}\n{percent}% • {humanbytes(downloaded_bytes)}/{humanbytes(total_bytes or 0)}"
                 asyncio.create_task(status_msg.edit(text))
             elif d.get("status") == "finished":
-                asyncio.create_task(status_msg.edit("⚙️ Merging/processing video..."))
+                asyncio.create_task(
+                    status_msg.edit("⚙️ Merging/processing video..."))
         except Exception as e:
             print(f"Progress hook error: {e}")
 
@@ -428,15 +459,16 @@ async def handle_video_download(bot, chat_id):
     # Download video
     try:
         await status_msg.edit("📥 Starting download with yt-dlp...")
-        
+
         loop = asyncio.get_event_loop()
+
         def run_ydl():
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
-        
+
         await loop.run_in_executor(None, run_ydl)
         print("✅ Video downloaded successfully")
-        
+
     except Exception as e:
         await status_msg.edit(f"❌ Download failed: {e}\n\nPossible issues:\n• Invalid URL\n• Private account\n• Expired cookies")
         INSTADL_STATE.pop(chat_id, None)
@@ -490,7 +522,7 @@ async def handle_video_download(bot, chat_id):
     try:
         await asyncio.sleep(3)
         await status_msg.delete()
-    except:
+    except BaseException:
         pass
-    
+
     INSTADL_STATE.pop(chat_id, None)

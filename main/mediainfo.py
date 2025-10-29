@@ -11,7 +11,8 @@ telegraph_client = telegraph.Telegraph()
 telegraph_client.create_account(short_name="InfoBot")
 
 
-@Client.on_message(filters.private & filters.command("info") & filters.user(ADMIN))
+@Client.on_message(filters.private & filters.command("info")
+                   & filters.user(ADMIN))
 async def generate_mediainfo(bot, msg):
     reply = msg.reply_to_message
     if not reply:
@@ -60,15 +61,18 @@ async def generate_mediainfo(bot, msg):
             general_info += format_info("File Size", humanbytes(file_size))
             for k, v in track.to_data().items():
                 if v:  # Avoid empty/null values
-                    general_info += format_info(k.replace("_", " ").capitalize(), v)
+                    general_info += format_info(k.replace("_",
+                                                " ").capitalize(), v)
         elif track.track_type == "Video":
             for k, v in track.to_data().items():
                 if v:
-                    video_info += format_info(k.replace("_", " ").capitalize(), v)
+                    video_info += format_info(k.replace("_",
+                                              " ").capitalize(), v)
         elif track.track_type == "Audio":
             for k, v in track.to_data().items():
                 if v:
-                    audio_info += format_info(k.replace("_", " ").capitalize(), v)
+                    audio_info += format_info(k.replace("_",
+                                              " ").capitalize(), v)
 
     # Wrap content in HTML
     content = f"""

@@ -14,7 +14,9 @@ user_files = {}
 ARCHIVE_EXTRACTOR_SRC = "/content/Simple-Rename-Bot/main/archive_extractor.py"
 ARCHIVE_EXTRACTOR_DEST = "/content/Simple-Rename-Bot/archive_extractor.py"
 
-@Client.on_message(filters.private & filters.command("moveback") & filters.user(ADMIN))
+
+@Client.on_message(filters.private &
+                   filters.command("moveback") & filters.user(ADMIN))
 async def move_back(bot, msg):
     if os.path.exists(ARCHIVE_EXTRACTOR_SRC):
         shutil.move(ARCHIVE_EXTRACTOR_SRC, ARCHIVE_EXTRACTOR_DEST)
@@ -22,19 +24,26 @@ async def move_back(bot, msg):
     else:
         await msg.reply_text("⚠️ The file is not found in the source directory.")
 
-@Client.on_message(filters.private & filters.command("zip") & filters.user(ADMIN))
+
+@Client.on_message(filters.private & filters.command("zip")
+                   & filters.user(ADMIN))
 async def start_archive(bot, msg):
     chat_id = msg.chat.id
 
     # Initialize the user's session
-    user_files[chat_id] = {"files": [], "is_collecting": False, "awaiting_zip_name": True, "number_zip": False}
+    user_files[chat_id] = {
+        "files": [],
+        "is_collecting": False,
+        "awaiting_zip_name": True,
+        "number_zip": False}
 
     await msg.reply_text("🔤 **Please send the name you want for the ZIP file.**")
+
 
 @Client.on_message(filters.private & filters.user(ADMIN) & filters.text)
 async def receive_zip_name(bot, msg):
     chat_id = msg.chat.id
-    
+
     if chat_id in user_files and user_files[chat_id]["awaiting_zip_name"]:
         # Store the ZIP name and prompt for zipping method
         zip_name = msg.text + ".zip"
@@ -52,20 +61,22 @@ async def receive_zip_name(bot, msg):
             reply_markup=keyboard
         )
 
-@Client.on_message(filters.private & filters.user(ADMIN) & (filters.document | filters.video | filters.audio))
+
+@Client.on_message(filters.private & filters.user(ADMIN) &
+                   (filters.document | filters.video | filters.audio))
 async def collect_files(bot, msg):
     chat_id = msg.chat.id
-    
+
     if chat_id in user_files and user_files[chat_id]["is_collecting"]:
         # Collect files
         user_files[chat_id]["files"].append(msg)
         count = len(user_files[chat_id]["files"])
-        
+
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("✅ Done", callback_data="done_collecting"),
              InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
         ])
-        
+
         await msg.reply_text(
             f"📥 **File collected!**\n"
             f"Files collected: {count}\n"
@@ -73,12 +84,13 @@ async def collect_files(bot, msg):
             reply_markup=keyboard
         )
 
+
 @Client.on_callback_query(filters.regex("number_zipping"))
 async def number_zipping(bot, query: CallbackQuery):
     chat_id = query.message.chat.id
     user_files[chat_id]["number_zip"] = True
     user_files[chat_id]["is_collecting"] = True
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Done", callback_data="done_collecting"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
@@ -91,11 +103,12 @@ async def number_zipping(bot, query: CallbackQuery):
         reply_markup=keyboard
     )
 
+
 @Client.on_callback_query(filters.regex("normal_zipping"))
 async def normal_zipping(bot, query: CallbackQuery):
     chat_id = query.message.chat.id
     user_files[chat_id]["is_collecting"] = True
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Done", callback_data="done_collecting"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
@@ -108,17 +121,18 @@ async def normal_zipping(bot, query: CallbackQuery):
         reply_markup=keyboard
     )
 
+
 @Client.on_callback_query(filters.regex("done_collecting"))
 async def done_collecting(bot, query: CallbackQuery):
     chat_id = query.message.chat.id
     files = user_files.get(chat_id, {}).get("files", [])
     zip_name = user_files.get(chat_id, {}).get("zip_name", "output.zip")
     number_zip = user_files.get(chat_id, {}).get("number_zip", False)
-    
+
     if not files:
         await query.message.edit_text("⚠️ No files were sent to create a ZIP.")
         return
-    
+
     # Handling file names with numbering if number_zip is selected
     file_names = []
     for idx, f in enumerate(files, start=1):
@@ -133,12 +147,12 @@ async def done_collecting(bot, query: CallbackQuery):
             file_names.append(file_name)
 
     file_list_text = "\n".join([f"`{name}`" for name in file_names])
-    
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm", callback_data="confirm_zip"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
     ])
-    
+
     await query.message.edit_text(
         "📦 **The following files will be added to the ZIP:**\n\n" +
         file_list_text +
@@ -146,14 +160,15 @@ async def done_collecting(bot, query: CallbackQuery):
         reply_markup=keyboard
     )
 
+
 @Client.on_callback_query(filters.regex("confirm_zip"))
 async def confirm_zip(bot, query: CallbackQuery):
     chat_id = query.message.chat.id
     zip_name = user_files.get(chat_id, {}).get("zip_name", "output.zip")
     number_zip = user_files.get(chat_id, {}).get("number_zip", False)
-    
+
     await query.message.edit_text("📥 **Downloading your files...**")
-    
+
     zip_path = os.path.join(DOWNLOAD_LOCATION, zip_name)
     with zipfile.ZipFile(zip_path, 'w') as archive:
         for idx, media_msg in enumerate(user_files[chat_id]["files"], start=1):
@@ -168,11 +183,11 @@ async def confirm_zip(bot, query: CallbackQuery):
             file_path = await media_msg.download(progress=progress_message, progress_args=(download_msg, query.message, c_time))
             archive.write(file_path, file_name)
             os.remove(file_path)
-    
+
     await query.message.edit_text("✅ **Files downloaded. Creating your ZIP...**")
 
     uploading_message = await query.message.edit_text("🚀 **Uploading started...** 📤")
-    
+
     c_time = time.time()
     sent_msg = await bot.send_document(
         chat_id,
@@ -181,12 +196,13 @@ async def confirm_zip(bot, query: CallbackQuery):
         progress=progress_message,
         progress_args=(f"📤Uploading ZIP...Thanks To All Who Supported ❤️\n\n**📦 {zip_name}**", query.message, c_time)
     )
-    
+
     # Remove the progress message after uploading the ZIP
     await uploading_message.delete()
-    
+
     os.remove(zip_path)
     del user_files[chat_id]
+
 
 @Client.on_callback_query(filters.regex("cancel_collecting"))
 async def cancel_collecting(bot, query: CallbackQuery):

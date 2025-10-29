@@ -1,22 +1,27 @@
-import os, time, subprocess, json
+import os
+import time
+import subprocess
+import json
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
-@Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
+
+@Client.on_message(filters.private & filters.command("megaup")
+                   & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
     reply = msg.reply_to_message
     if not reply:
         return await msg.reply_text("📌 Please reply to a file (video, audio, doc) to upload to Mega.nz.")
-    
+
     media = reply.document or reply.video or reply.audio
     if not media:
         return await msg.reply_text("❌ Unsupported file type.")
 
     og_media = getattr(reply, reply.media.value)
     filename = og_media.file_name or "uploaded_file"
-    
+
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
 
@@ -42,18 +47,30 @@ async def mega_uploader(bot, msg):
     # Step 3: Create rclone config file
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
-    obscured_pass = os.popen(f"rclone obscure \"{password.strip()}\"").read().strip()
+    obscured_pass = os.popen(
+        f"rclone obscure \"{password.strip()}\"").read().strip()
     with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
-        f.write(f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
+        f.write(
+            f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
 
     # Step 4: Show Uploading Status in Bot (Static)
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
 
     # Step 5: Upload to Mega and stream output to Colab logs
     cmd = [
-        "rclone", "copy", downloaded_path, "mega:", "--progress", "--stats-one-line",
-        "--stats=1s", "--log-level", "INFO", "--config", os.path.join(rclone_config_path, "rclone.conf")
-    ]
+        "rclone",
+        "copy",
+        downloaded_path,
+        "mega:",
+        "--progress",
+        "--stats-one-line",
+        "--stats=1s",
+        "--log-level",
+        "INFO",
+        "--config",
+        os.path.join(
+            rclone_config_path,
+            "rclone.conf")]
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
 
@@ -75,7 +92,8 @@ async def mega_uploader(bot, msg):
 
     # Step 6: Get Mega Storage Info (via --json)
     try:
-        about_output = os.popen(f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
+        about_output = os.popen(
+            f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
         stats = json.loads(about_output)
 
         total_bytes = stats.get("total", 0)
@@ -86,7 +104,8 @@ async def mega_uploader(bot, msg):
         used = humanbytes(used_bytes)
         free = humanbytes(free_bytes)
 
-        used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+        used_pct = int((used_bytes / total_bytes) *
+                       100) if total_bytes > 0 else 0
 
         # Draw storage bar
         full_blocks = used_pct // 10
@@ -120,7 +139,7 @@ async def mega_uploader(bot, msg):
     # Step 8: Cleanup
     try:
         os.remove(downloaded_path)
-    except:
+    except BaseException:
         pass
 
 
@@ -128,6 +147,6 @@ async def mega_uploader(bot, msg):
 async def delete_megamsg(bot, query: CallbackQuery):
     try:
         await query.message.delete()
-    except:
+    except BaseException:
         pass
     await query.answer("🗑️ Message deleted", show_alert=False)
