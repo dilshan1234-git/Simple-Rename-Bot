@@ -1,0 +1,33 @@
+name: Auto Format Python Code
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install autopep8
+        run: pip install autopep8
+
+      - name: Run autopep8 formatter
+        run: autopep8 --in-place --aggressive --aggressive -r .
+
+      - name: Commit formatted code
+        run: |
+          git config user.name "GitHub Action"
+          git config user.email "actions@github.com"
+          git add .
+          git commit -m "Auto-format code with autopep8" || echo "No changes"
+          git push
