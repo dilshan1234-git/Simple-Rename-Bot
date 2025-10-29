@@ -1,3 +1,4 @@
+
 import os
 import time
 import asyncio
@@ -279,13 +280,12 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Cleanup files
-if os.path.exists(downloaded_path):
-    os.remove(downloaded_path)
-if thumb_path and os.path.exists(thumb_path):
-    os.remove(thumb_path)
-
-
+    # Cleanup files based on Colab toggle
+    if not STORE_ON_COLAB:
+        if os.path.exists(downloaded_path):
+            os.remove(downloaded_path)
+    if thumb_path and os.path.exists(thumb_path):
+        os.remove(thumb_path)
 
 # Description handler
 @Client.on_callback_query(filters.regex(r'^desc_https?://'))
