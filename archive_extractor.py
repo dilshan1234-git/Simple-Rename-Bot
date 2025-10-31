@@ -32,7 +32,8 @@ async def start_archive(bot, msg):
         "is_collecting": False,
         "awaiting_zip_name": True,
         "number_zip": False,
-        "use_colab": False
+        "use_colab": False,
+        "last_msg_id": None  # to track the last status message
     }
     await msg.reply_text("🔤 **Please send the name you want for the ZIP file.**")
 
@@ -63,7 +64,6 @@ async def select_zipping_method(bot, query: CallbackQuery):
     is_number = query.data == "number_zipping"
     user_files[chat_id]["number_zip"] = is_number
 
-    # Ask user whether to use Telegram files or Colab files
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📤 Send files via Telegram", callback_data="use_telegram")],
         [InlineKeyboardButton("📁 Use files from Colab", callback_data="use_colab")]
@@ -81,17 +81,74 @@ async def use_telegram(bot, query: CallbackQuery):
     chat_id = query.message.chat.id
     user_files[chat_id]["is_collecting"] = True
     user_files[chat_id]["use_colab"] = False
+    user_files[chat_id]["files"] = []
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Done", callback_data="done_collecting"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
     ])
 
-    await query.message.edit_text(
+    msg = await query.message.edit_text(
         "📤 Now, send the files you want to include in the ZIP via Telegram.\n"
         "When you're done, click **Done**.",
         reply_markup=keyboard
     )
+    user_files[chat_id]["last_msg_id"] = msg.id
+
+
+# Handle received media files for Telegram zipping
+@Client.on_message(filters.private & filters.user(ADMIN) & (filters.document | filters.audio | filters.video | filters.photo))
+async def collect_files(bot, msg):
+    chat_id = msg.chat.id
+    if chat_id not in user_files or not user_files[chat_id].get("is_collecting"):
+        return
+
+    # Add received file to list
+    user_files[chat_id]["files"].append(msg)
+
+    # Delete previous status message
+    if user_files[chat_id].get("last_msg_id"):
+        try:
+            await bot.delete_messages(chat_id, user_files[chat_id]["last_msg_id"])
+        except:
+            pass
+
+    # Prepare file list text and total size
+    files = user_files[chat_id]["files"]
+    number_zip = user_files[chat_id]["number_zip"]
+    file_list_text = []
+    total_size = 0
+    for idx, f in enumerate(files, start=1):
+        if f.document:
+            name = f"{idx}.{f.document.file_name}" if number_zip else f.document.file_name
+            total_size += f.document.file_size if f.document.file_size else 0
+        elif f.video:
+            name = f"{idx}.{f.video.file_name}" if number_zip else f.video.file_name
+            total_size += f.video.file_size if f.video.file_size else 0
+        elif f.audio:
+            name = f"{idx}.{f.audio.file_name}" if number_zip else f.audio.file_name
+            total_size += f.audio.file_size if f.audio.file_size else 0
+        elif f.photo:
+            name = f"{idx}.photo.jpg" if number_zip else "photo.jpg"
+            total_size += f.photo.file_size if f.photo.file_size else 0
+        else:
+            name = f"{idx}.Unknown"
+        file_list_text.append(f"`{name}`")
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Confirm", callback_data="confirm_zip"),
+         InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
+    ])
+
+    msg2 = await msg.reply_text(
+        "📥 **Received files:**\n\n" +
+        "\n".join(file_list_text) +
+        f"\n\n**Total Size:** `{humanbytes(total_size)}`" +
+        f"\n**ZIP Name:** `{user_files[chat_id]['zip_name']}`\n\nClick **Confirm** to proceed or **Cancel** to stop.",
+        reply_markup=keyboard
+    )
+
+    user_files[chat_id]["last_msg_id"] = msg2.id
 
 
 @Client.on_callback_query(filters.regex("use_colab"))
@@ -100,7 +157,6 @@ async def use_colab(bot, query: CallbackQuery):
     user_files[chat_id]["is_collecting"] = False
     user_files[chat_id]["use_colab"] = True
 
-    # Only include files, ignore folders
     colab_files = [
         os.path.join(DOWNLOAD_LOCATION, f)
         for f in os.listdir(DOWNLOAD_LOCATION)
@@ -114,8 +170,6 @@ async def use_colab(bot, query: CallbackQuery):
 
     user_files[chat_id]["files"] = colab_files
     file_list_text = "\n".join([f"`{os.path.basename(f)}`" for f in colab_files])
-
-    # Calculate total size
     total_size = sum(os.path.getsize(f) for f in colab_files)
 
     keyboard = InlineKeyboardMarkup([
@@ -192,12 +246,10 @@ async def confirm_zip(bot, query: CallbackQuery):
         files = user_files[chat_id]["files"]
 
         if use_colab:
-            # Only write Colab files
             for idx, file_path in enumerate(files, start=1):
                 arc_name = f"{idx}.{os.path.basename(file_path)}" if number_zip else os.path.basename(file_path)
                 archive.write(file_path, arc_name)
         else:
-            # Download files from Telegram
             for idx, media_msg in enumerate(files, start=1):
                 c_time = time.time()
                 file_name = f"{idx}.{media_msg.document.file_name}" if media_msg.document and number_zip else \
