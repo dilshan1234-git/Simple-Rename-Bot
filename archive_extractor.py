@@ -115,6 +115,9 @@ async def use_colab(bot, query: CallbackQuery):
     user_files[chat_id]["files"] = colab_files
     file_list_text = "\n".join([f"`{os.path.basename(f)}`" for f in colab_files])
 
+    # Calculate total size
+    total_size = sum(os.path.getsize(f) for f in colab_files)
+
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Confirm", callback_data="confirm_zip"),
          InlineKeyboardButton("❌ Cancel", callback_data="cancel_collecting")]
@@ -123,7 +126,8 @@ async def use_colab(bot, query: CallbackQuery):
     await query.message.edit_text(
         "📁 **The following files will be added to the ZIP from Colab:**\n\n" +
         file_list_text +
-        f"\n\n**ZIP Name:** `{user_files[chat_id]['zip_name']}`\n\nClick **Confirm** to proceed or **Cancel** to stop.",
+        f"\n\n**Total Size:** `{humanbytes(total_size)}`" +
+        f"\n**ZIP Name:** `{user_files[chat_id]['zip_name']}`\n\nClick **Confirm** to proceed or **Cancel** to stop.",
         reply_markup=keyboard
     )
 
@@ -140,17 +144,23 @@ async def done_collecting(bot, query: CallbackQuery):
 
     number_zip = user_files[chat_id].get("number_zip", False)
     file_names = []
+    total_size = 0
+
     for idx, f in enumerate(files, start=1):
         if hasattr(f, "document"):
             file_name = f"{idx}.{f.document.file_name}" if number_zip else f.document.file_name
+            total_size += f.document.file_size if f.document.file_size else 0
         elif hasattr(f, "video"):
             file_name = f"{idx}.{f.video.file_name}" if number_zip else f.video.file_name
+            total_size += f.video.file_size if f.video.file_size else 0
         elif hasattr(f, "audio"):
             file_name = f"{idx}.{f.audio.file_name}" if number_zip else f.audio.file_name
+            total_size += f.audio.file_size if f.audio.file_size else 0
         else:  # Colab files
             file_name = os.path.basename(f)
             if number_zip:
                 file_name = f"{idx}.{file_name}"
+            total_size += os.path.getsize(f)
         file_names.append(file_name)
 
     file_list_text = "\n".join([f"`{name}`" for name in file_names])
@@ -162,7 +172,8 @@ async def done_collecting(bot, query: CallbackQuery):
     await query.message.edit_text(
         "📦 **The following files will be added to the ZIP:**\n\n" +
         file_list_text +
-        f"\n\n**ZIP Name:** `{zip_name}`\n\nClick **Confirm** to proceed or **Cancel** to stop.",
+        f"\n\n**Total Size:** `{humanbytes(total_size)}`" +
+        f"\n**ZIP Name:** `{zip_name}`\n\nClick **Confirm** to proceed or **Cancel** to stop.",
         reply_markup=keyboard
     )
 
