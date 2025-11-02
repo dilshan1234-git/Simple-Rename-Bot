@@ -8,8 +8,7 @@ from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
 
-@Client.on_message(filters.private & filters.command("megaup")
-                   & filters.user(ADMIN))
+@Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
 async def mega_uploader(bot, msg):
     reply = msg.reply_to_message
     if not reply:
@@ -35,28 +34,23 @@ async def mega_uploader(bot, msg):
 
     filesize = humanbytes(og_media.file_size)
 
-    # Step 2: Load Mega credentials
-    login_path = os.path.join(os.path.dirname(__file__), "mega_login.txt")
-    try:
-        with open(login_path, "r") as f:
-            creds = f.read().strip()
-        email, password = creds.split(":", 1)
-    except Exception as e:
-        return await sts.edit(f"❌ Failed to load mega_login.txt: {e}")
-
-    # Step 3: Create rclone config file
+    # Step 2: Prepare persistent Mega config
+    repo_conf = os.path.join(os.path.dirname(__file__), "rclone.conf")
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
-    obscured_pass = os.popen(
-        f"rclone obscure \"{password.strip()}\"").read().strip()
-    with open(os.path.join(rclone_config_path, "rclone.conf"), "w") as f:
-        f.write(
-            f"[mega]\ntype = mega\nuser = {email.strip()}\npass = {obscured_pass}\n")
+    rclone_conf = os.path.join(rclone_config_path, "rclone.conf")
 
-    # Step 4: Show Uploading Status in Bot (Static)
+    if not os.path.exists(repo_conf):
+        return await sts.edit("❌ Missing `rclone.conf` in your bot directory.\n\n"
+                              "Please copy it once from `/root/.config/rclone/rclone.conf` after configuring rclone.")
+
+    # Copy stored rclone.conf into runtime config
+    os.system(f"cp '{repo_conf}' '{rclone_conf}'")
+
+    # Step 3: Show Uploading Status
     await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
 
-    # Step 5: Upload to Mega and stream output to Colab logs
+    # Step 4: Upload to Mega
     cmd = [
         "rclone",
         "copy",
@@ -68,20 +62,13 @@ async def mega_uploader(bot, msg):
         "--log-level",
         "INFO",
         "--config",
-        os.path.join(
-            rclone_config_path,
-            "rclone.conf")]
+        rclone_conf
+    ]
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
 
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True
-    )
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
-    # Print rclone progress in Colab logs
     while True:
         line = proc.stdout.readline()
         if not line:
@@ -90,10 +77,9 @@ async def mega_uploader(bot, msg):
 
     proc.wait()
 
-    # Step 6: Get Mega Storage Info (via --json)
+    # Step 5: Get Mega Storage Info
     try:
-        about_output = os.popen(
-            f"rclone about mega: --json --config {os.path.join(rclone_config_path, 'rclone.conf')}").read()
+        about_output = os.popen(f"rclone about mega: --json --config {rclone_conf}").read()
         stats = json.loads(about_output)
 
         total_bytes = stats.get("total", 0)
@@ -102,22 +88,19 @@ async def mega_uploader(bot, msg):
 
         total = humanbytes(total_bytes)
         used = humanbytes(used_bytes)
-        free = humanbytes(free_bytes)
+        used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
 
-        used_pct = int((used_bytes / total_bytes) *
-                       100) if total_bytes > 0 else 0
-
-        # Draw storage bar
+        # Storage usage bar
         full_blocks = used_pct // 10
         empty_blocks = 10 - full_blocks
         bar = "█" * full_blocks + "░" * empty_blocks
 
-    except Exception as e:
-        total = used = free = "Unknown"
+    except Exception:
+        total = used = "Unknown"
         used_pct = 0
         bar = "░" * 10
 
-    # Step 7: Final Message with Storage Info and Delete Button
+    # Step 6: Final message
     if proc.returncode == 0:
         final_text = (
             f"✅ **Upload Complete to Mega.nz!**\n\n"
@@ -128,18 +111,15 @@ async def mega_uploader(bot, msg):
             f"{bar} `{used_pct}%` used"
         )
     else:
-        final_text = "❌ Upload failed. Please check your credentials or try again later."
+        final_text = "❌ Upload failed. Please check your Mega config or try again later."
 
-    btn = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]
-    ])
-
+    btn = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ Delete", callback_data="delmegamsg")]])
     await sts.edit(final_text, reply_markup=btn)
 
-    # Step 8: Cleanup
+    # Step 7: Cleanup
     try:
         os.remove(downloaded_path)
-    except BaseException:
+    except:
         pass
 
 
@@ -147,6 +127,6 @@ async def mega_uploader(bot, msg):
 async def delete_megamsg(bot, query: CallbackQuery):
     try:
         await query.message.delete()
-    except BaseException:
+    except:
         pass
     await query.answer("🗑️ Message deleted", show_alert=False)
