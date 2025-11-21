@@ -98,8 +98,8 @@ async def youtube_link_handler(bot, msg):
     # Send thumbnail with info caption first
     caption = (
         f"**🎞 {title}**\n\n"
-        f"**👀 Views:** {views}  |  "**👍 Likes:** {likes}\n"
-        f"**⏰ {duration}**  |   "**🎥 {uploader}**\n\n"
+        f"**👀 Views:** {views}  |  **👍 Likes:** {likes}\n"
+        f"**⏰ {duration}**  |  **🎥 {uploader}**\n\n"
         f"📥 **Select a resolution or audio format from buttons below.**"
     )
 
