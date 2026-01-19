@@ -3,7 +3,7 @@ import time
 from main.utils import progress_message
 from pyrogram.errors import MessageNotModified
 
-# Matches:
+# Matches rclone output like:
 # 2.625 MiB / 422.221 MiB, 1%, 2.625 MiB/s, ETA 2m39s
 PROGRESS_REGEX = re.compile(
     r"([\d.]+)\s*(KiB|MiB|GiB|TiB)\s*/\s*([\d.]+)\s*(KiB|MiB|GiB|TiB),\s*(\d+)%"
@@ -25,10 +25,9 @@ def to_bytes(value, unit):
 
 async def mega_progress(line, text, message, start_time):
     """
-    Converts rclone progress lines into Telegram style progress_message()
-    same UI as downloading progress.
+    Convert rclone upload progress into the SAME style as Telegram downloading
+    using progress_message(current, total, text, message, start_time)
     """
-
     global _last_update
 
     match = PROGRESS_REGEX.search(line)
@@ -43,7 +42,7 @@ async def mega_progress(line, text, message, start_time):
     current = to_bytes(current_val, current_unit)
     total = to_bytes(total_val, total_unit)
 
-    # Limit edits to once per second (Telegram safety)
+    # Limit edits to once per second to avoid flood & MESSAGE_NOT_MODIFIED
     now = time.time()
     if now - _last_update < 1:
         return
