@@ -22,10 +22,9 @@ async def mega_uploader(bot, msg):
     og_media = getattr(reply, reply.media.value)
     filename = og_media.file_name or "uploaded_file"
 
-    # Initial download message
+    # Step 1: Downloading message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**")
 
-    # Step 1: Download file from Telegram (your existing style)
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -35,7 +34,7 @@ async def mega_uploader(bot, msg):
 
     filesize = humanbytes(og_media.file_size)
 
-    # Step 2: Prepare persistent Mega config
+    # Step 2: Prepare rclone config
     repo_conf = os.path.join(os.path.dirname(__file__), "rclone.conf")
     rclone_config_path = "/root/.config/rclone/"
     os.makedirs(rclone_config_path, exist_ok=True)
@@ -44,29 +43,27 @@ async def mega_uploader(bot, msg):
     if not os.path.exists(repo_conf):
         return await sts.edit(
             "❌ Missing `rclone.conf` in your bot directory.\n\n"
-            "Please copy it once from `/root/.config/rclone/rclone.conf` after configuring rclone."
+            "Copy it once from `/root/.config/rclone/rclone.conf` after configuring rclone."
         )
 
-    # Copy stored rclone.conf into runtime config
     os.system(f"cp '{repo_conf}' '{rclone_conf}'")
 
-    # Step 3: Show Uploading Status
+    # Step 3: Uploading message
     upload_text = f"☁️ **Uploading:** **`{filename}`**"
     await sts.edit(upload_text)
 
-    # Step 4: Upload to Mega with SAME progress style as downloading
+    # Step 4: Upload to Mega with LIVE progress (line-buffered)
     cmd = [
+        "stdbuf", "-oL",           # <--- CRITICAL for live progress in Colab
         "rclone",
         "copy",
         downloaded_path,
         "mega:",
         "--progress",
-        "--stats-one-line",
         "--stats=1s",
-        "--log-level",
-        "INFO",
-        "--config",
-        rclone_conf
+        "--stats-one-line",
+        "--log-level", "INFO",
+        "--config", rclone_conf
     ]
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
@@ -75,7 +72,7 @@ async def mega_uploader(bot, msg):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
+        universal_newlines=True,
         bufsize=1
     )
 
@@ -89,7 +86,6 @@ async def mega_uploader(bot, msg):
         line = line.strip()
         print(line)
 
-        # Feed rclone progress into your progress_message system
         await mega_progress(
             line=line,
             text=upload_text,
@@ -99,7 +95,7 @@ async def mega_uploader(bot, msg):
 
     proc.wait()
 
-    # Step 5: Get Mega Storage Info
+    # Step 5: Mega storage info
     try:
         about_output = os.popen(f"rclone about mega: --json --config {rclone_conf}").read()
         stats = json.loads(about_output)
@@ -109,14 +105,13 @@ async def mega_uploader(bot, msg):
 
         total = humanbytes(total_bytes)
         used = humanbytes(used_bytes)
-        used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
+        used_pct = int((used_bytes / total_bytes) * 100) if total_bytes else 0
 
-        # Storage usage bar
         full_blocks = used_pct // 10
         empty_blocks = 10 - full_blocks
         bar = "█" * full_blocks + "░" * empty_blocks
 
-    except Exception:
+    except:
         total = used = "Unknown"
         used_pct = 0
         bar = "░" * 10
