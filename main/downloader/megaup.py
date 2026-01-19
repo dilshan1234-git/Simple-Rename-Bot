@@ -6,6 +6,7 @@ from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
+from main.downloader.mega_progress import mega_progress
 
 
 @Client.on_message(filters.private & filters.command("megaup") & filters.user(ADMIN))
@@ -22,9 +23,9 @@ async def mega_uploader(bot, msg):
     filename = og_media.file_name or "uploaded_file"
 
     # Initial download message
-    sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**\n\n🔁 Please wait...")
+    sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**")
 
-    # Step 1: Download file from Telegram
+    # Step 1: Download file from Telegram (your existing style)
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -41,16 +42,19 @@ async def mega_uploader(bot, msg):
     rclone_conf = os.path.join(rclone_config_path, "rclone.conf")
 
     if not os.path.exists(repo_conf):
-        return await sts.edit("❌ Missing `rclone.conf` in your bot directory.\n\n"
-                              "Please copy it once from `/root/.config/rclone/rclone.conf` after configuring rclone.")
+        return await sts.edit(
+            "❌ Missing `rclone.conf` in your bot directory.\n\n"
+            "Please copy it once from `/root/.config/rclone/rclone.conf` after configuring rclone."
+        )
 
     # Copy stored rclone.conf into runtime config
     os.system(f"cp '{repo_conf}' '{rclone_conf}'")
 
     # Step 3: Show Uploading Status
-    await sts.edit(f"☁️ **Uploading:** **`{filename}`**\n\n🔁 Please wait...")
+    upload_text = f"☁️ **Uploading:** **`{filename}`**"
+    await sts.edit(upload_text)
 
-    # Step 4: Upload to Mega
+    # Step 4: Upload to Mega with SAME progress style as downloading
     cmd = [
         "rclone",
         "copy",
@@ -67,13 +71,31 @@ async def mega_uploader(bot, msg):
 
     print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
 
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+
+    start_time = time.time()
 
     while True:
         line = proc.stdout.readline()
         if not line:
             break
-        print(line.strip())
+
+        line = line.strip()
+        print(line)
+
+        # Feed rclone progress into your progress_message system
+        await mega_progress(
+            line=line,
+            text=upload_text,
+            message=sts,
+            start_time=start_time
+        )
 
     proc.wait()
 
@@ -84,7 +106,6 @@ async def mega_uploader(bot, msg):
 
         total_bytes = stats.get("total", 0)
         used_bytes = stats.get("used", 0)
-        free_bytes = stats.get("free", 0)
 
         total = humanbytes(total_bytes)
         used = humanbytes(used_bytes)
