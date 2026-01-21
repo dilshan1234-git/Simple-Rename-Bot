@@ -335,11 +335,7 @@ async def confirm_zip(bot, query: CallbackQuery):
         # If deletion fails, ignore — we don't want the bot to crash for cleanup failures
         pass
 
-    try:
-        os.remove(zip_path)
-    except Exception:
-        pass
-
+    
     # Cleanup stored user data
     if chat_id in user_files:
         del user_files[chat_id]
