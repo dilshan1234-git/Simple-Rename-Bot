@@ -68,12 +68,10 @@ async def mega_uploader(bot, msg):
         rclone_conf
     ]
 
-    print(f"🔄 Uploading '{filename}' to Mega.nz...\n")
-
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        stderr=subprocess.PIPE,  # rclone writes progress to stderr
         bufsize=0,
         universal_newlines=True
     )
@@ -82,14 +80,13 @@ async def mega_uploader(bot, msg):
     buffer = ""
 
     while True:
-        char = proc.stdout.read(1)
+        char = proc.stderr.read(1)  # read stderr for live progress
         if not char:
             break
 
-        if char == "\r" or char == "\n":
+        if char in ("\r", "\n"):
             line = buffer.strip()
             buffer = ""
-
             if line:
                 await mega_progress(
                     line=line,
@@ -114,7 +111,6 @@ async def mega_uploader(bot, msg):
         used = humanbytes(used_bytes)
         used_pct = int((used_bytes / total_bytes) * 100) if total_bytes > 0 else 0
 
-        # Storage usage bar
         full_blocks = used_pct // 10
         empty_blocks = 10 - full_blocks
         bar = "█" * full_blocks + "░" * empty_blocks
