@@ -3,7 +3,8 @@ import time
 from main.utils import progress_message
 from pyrogram.errors import MessageNotModified
 
-# Matches rclone stats lines
+# Matches rclone stats lines like:
+# 2.625 MiB / 422.221 MiB, 1%, 2.625 MiB/s, ETA 2m39s
 PROGRESS_REGEX = re.compile(
     r"([\d.]+)\s*(KiB|MiB|GiB|TiB)\s*/\s*([\d.]+)\s*(KiB|MiB|GiB|TiB),\s*(\d+)%"
 )
