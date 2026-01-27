@@ -25,7 +25,7 @@ async def mega_uploader(bot, msg):
     # Initial download message
     sts = await msg.reply_text(f"📥 **Downloading:** **`{filename}`**")
 
-    # Step 1: Download file from Telegram (your existing style)
+    # Step 1: Download file from Telegram
     c_time = time.time()
     downloaded_path = await reply.download(
         file_name=os.path.join(DOWNLOAD_LOCATION, filename),
@@ -54,17 +54,16 @@ async def mega_uploader(bot, msg):
     upload_text = f"☁️ **Uploading:** **`{filename}`**"
     await sts.edit(upload_text)
 
-    # Step 4: Upload to Mega with SAME progress style as downloading
+    # Step 4: Upload to Mega with live progress
     cmd = [
         "rclone",
         "copy",
         downloaded_path,
         "mega:",
-        "--progress",
-        "--stats-one-line",
         "--stats=1s",
+        "--stats-one-line",
         "--log-level",
-        "INFO",
+        "NOTICE",
         "--config",
         rclone_conf
     ]
@@ -75,27 +74,31 @@ async def mega_uploader(bot, msg):
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        bufsize=0,
+        universal_newlines=True
     )
 
     start_time = time.time()
+    buffer = ""
 
     while True:
-        line = proc.stdout.readline()
-        if not line:
+        char = proc.stdout.read(1)
+        if not char:
             break
 
-        line = line.strip()
-        print(line)
+        if char == "\r" or char == "\n":
+            line = buffer.strip()
+            buffer = ""
 
-        # Feed rclone progress into your progress_message system
-        await mega_progress(
-            line=line,
-            text=upload_text,
-            message=sts,
-            start_time=start_time
-        )
+            if line:
+                await mega_progress(
+                    line=line,
+                    text=upload_text,
+                    message=sts,
+                    start_time=start_time
+                )
+        else:
+            buffer += char
 
     proc.wait()
 
