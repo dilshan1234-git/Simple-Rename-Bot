@@ -1,8 +1,14 @@
 import os
 import asyncio
 from moviepy.editor import VideoFileClip
-from pyrogram.utils import escape_markdown
 from main.utils import humanbytes, progress_message
+
+# Escape Markdown v2 special characters
+def escape_markdown(text: str) -> str:
+    escape_chars = r"_*[]()~`>#+-=|{}.!:"  # Telegram Markdown V2
+    for char in escape_chars:
+        text = text.replace(char, f"\\{char}")
+    return text
 
 # Ensure download folder exists
 os.makedirs("split_temp", exist_ok=True)
@@ -15,7 +21,7 @@ async def split_video(bot, chat_id, video_path, title, resolution, thumb_path=No
     """
 
     # Clean title for markdown
-    safe_title = escape_markdown(title, version=2)
+    safe_title = escape_markdown(title)
 
     # Max Telegram upload size per video in bytes (~2GB)
     MAX_SIZE = 2 * 1024 * 1024 * 1024
