@@ -11,24 +11,53 @@ def escape_markdown(text: str) -> str:
 
 async def split_video(bot, chat_id, video_path, title, resolution, thumb_path=None):
     """
-    Handles splitting, but now checks Telegram upload size AFTER download.
-    If video exceeds limit (~2GB), sends a message and skips upload.
+    Splits video into parts if it exceeds Telegram's ~2GB limit.
+    Returns list of split file paths.
     """
-    # Max Telegram upload size per video in bytes (~2GB)
-    MAX_SIZE = 2 * 1024 * 1024 * 1024
+    MAX_SIZE = 2 * 1024 * 1024 * 1024  # 2 GB
     video_size = os.path.getsize(video_path)
 
     if video_size <= MAX_SIZE:
-        # No split needed, return the downloaded file itself
         return [video_path]
-    else:
-        # File too big
-        safe_title = escape_markdown(title)
+
+    # Open video
+    try:
+        video = VideoFileClip(video_path)
+        duration = video.duration  # in seconds
+    except Exception as e:
         await bot.send_message(
             chat_id,
-            f"❌ **Download completed, but the video is too large for Telegram!**\n"
-            f"**🎞 {safe_title}** | Size: **{humanbytes(video_size)}**\n\n"
-            f"Try a lower resolution or split manually."
+            f"❌ Error opening video for splitting: {str(e)}"
         )
-        # Return empty list to skip upload
         return []
+
+    # Calculate approx split duration per part
+    num_parts = int(video_size // MAX_SIZE) + 1
+    part_duration = duration / num_parts
+
+    split_files = []
+    for i in range(num_parts):
+        start = i * part_duration
+        end = min((i + 1) * part_duration, duration)
+        part_file = f"{os.path.splitext(video_path)[0]}_Part {str(i+1).zfill(2)}.mp4"
+        try:
+            clip = video.subclip(start, end)
+            clip.write_videofile(
+                part_file,
+                codec="libx264",
+                audio_codec="aac",
+                temp_audiofile="temp-audio.m4a",
+                remove_temp=True,
+                verbose=False,
+                logger=None
+            )
+            clip.close()
+            split_files.append(part_file)
+        except Exception as e:
+            await bot.send_message(
+                chat_id,
+                f"❌ Error creating part {i+1}: {str(e)}"
+            )
+
+    video.close()
+    return split_files
