@@ -18,6 +18,22 @@ You can toggle the button below to decide where downloads are kept:
 ➡️ {store_button_text}
 
 ━━━━━━━━━━━━━━━━━━━━━━━
+
+VID_TRIMMER_TEXT = """
+         **Video Trimmer ✂**
+
+    ✂ ━━━━━━❰ **Feautures** ❱━━━━━━➣
+
+ ➭✂ **Video And Document Files Support\n**
+ ➭⚡ **Fast And Best Library\n**
+ ➭📥 **Download And Upload Progress Tracking** 📤\n
+
+❤ **Thanks To K-MAC For His Great Trimming Code.\n**
+
+**📂 Please Send Your Video Or Document To Trim.**
+   
+━━━━━━━━━━━━━━━━━━━━━━━
+
 📦 **Extra Options**
 
 ➭📤 **Upload Splitted Files From Colab**
