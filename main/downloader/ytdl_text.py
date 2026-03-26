@@ -19,7 +19,7 @@ You can toggle the button below to decide where downloads are kept:
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 
-VID_TRIMMER_TEXT = """
+VID_TRIMMER_TEXT = 
          **Video Trimmer ✂**
 
     ✂ ━━━━━━❰ **Feautures** ❱━━━━━━➣
