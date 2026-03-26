@@ -1,87 +1,64 @@
 import os
-import math
-import subprocess
-from main.utils import humanbytes
+import asyncio
+from moviepy.editor import VideoFileClip
+from pyrogram.utils import escape_markdown
+from main.utils import humanbytes, progress_message
 
-# Safe margin (Telegram limit ~2GB → keep ~1.95GB)
-MAX_SIZE = int(1.95 * 1024 * 1024 * 1024)
+# Ensure download folder exists
+os.makedirs("split_temp", exist_ok=True)
 
+async def split_video(bot, chat_id, video_path, title, resolution, thumb_path=None):
+    """
+    Split large videos into multiple parts if needed (for Telegram upload limits),
+    handle special characters in titles to avoid markdown issues,
+    and prevent re-download/re-split if files already exist.
+    """
 
-async def split_video(bot, chat_id, file_path, title, resolution, thumb_path):
-    total_size = os.path.getsize(file_path)
+    # Clean title for markdown
+    safe_title = escape_markdown(title, version=2)
 
-    # No split needed
-    if total_size <= MAX_SIZE:
-        return [file_path]
+    # Max Telegram upload size per video in bytes (~2GB)
+    MAX_SIZE = 2 * 1024 * 1024 * 1024
 
-    total_size_hr = humanbytes(total_size)
+    video_size = os.path.getsize(video_path)
+    if video_size <= MAX_SIZE:
+        # No split needed
+        return [video_path]
 
-    # Get duration using ffprobe
-    duration_cmd = [
-        "ffprobe", "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1",
-        file_path
-    ]
-    duration = float(subprocess.check_output(duration_cmd).decode().strip())
+    # If already split, skip re-splitting
+    base_name = os.path.splitext(os.path.basename(video_path))[0]
+    split_dir = os.path.join("split_temp", base_name)
+    os.makedirs(split_dir, exist_ok=True)
 
-    # Calculate size per second (VERY IMPORTANT)
-    size_per_sec = total_size / duration
+    existing_files = sorted([os.path.join(split_dir, f) for f in os.listdir(split_dir) if f.endswith(".mp4")])
+    if existing_files:
+        return existing_files
 
-    # Calculate safe duration per part
-    part_duration = MAX_SIZE / size_per_sec
+    # Load video
+    try:
+        clip = VideoFileClip(video_path)
+    except Exception as e:
+        await bot.send_message(chat_id, f"❌ **Error loading video for splitting:** {str(e)}")
+        return [video_path]
 
-    # Calculate number of parts
-    parts = math.ceil(duration / part_duration)
+    duration = clip.duration
+    total_size = os.path.getsize(video_path)
+    num_parts = int(total_size // MAX_SIZE) + 1
+    part_duration = duration / num_parts
 
-    # 🔥 Stylish message
-    await bot.send_message(
-        chat_id,
-        f"⚠️ **SIZE LIMIT EXCEEDED**\n\n"
-        f"📦 **Total Size:** `{total_size_hr}`\n"
-        f"🧠 **Smart Splitting Enabled**\n"
-        f"✂️ **Estimated Parts:** `{parts}`\n\n"
-        f"⚡ **Splitting without re-encoding (Ultra Fast)**",
-        parse_mode="markdown"
-    )
+    split_files = []
+    for i in range(num_parts):
+        start = i * part_duration
+        end = min((i + 1) * part_duration, duration)
+        part_clip = clip.subclip(start, end)
+        part_file = os.path.join(split_dir, f"{base_name}_part{i+1}.mp4")
+        try:
+            part_clip.write_videofile(part_file, codec="libx264", audio_codec="aac", verbose=False, logger=None)
+            split_files.append(part_file)
+        except Exception as e:
+            await bot.send_message(chat_id, f"❌ **Error creating split part {i+1}:** {str(e)}")
+        finally:
+            part_clip.close()
 
-    output_files = []
-
-    for i in range(parts):
-        start_time = i * part_duration
-
-        output_file = file_path.replace(".mp4", f"_part{i+1}.mp4")
-
-        split_cmd = [
-            "ffmpeg",
-            "-y",
-            "-ss", str(start_time),   # FAST SEEK
-            "-i", file_path,
-            "-t", str(part_duration),
-            "-c", "copy",             # NO RE-ENCODE (VERY FAST)
-            "-avoid_negative_ts", "1",
-            output_file
-        ]
-
-        subprocess.run(split_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        # 🔥 Extra safety check (rare case)
-        if os.path.getsize(output_file) > MAX_SIZE:
-            # fallback: reduce duration slightly
-            reduced_duration = part_duration * 0.95
-
-            split_cmd = [
-                "ffmpeg",
-                "-y",
-                "-ss", str(start_time),
-                "-i", file_path,
-                "-t", str(reduced_duration),
-                "-c", "copy",
-                "-avoid_negative_ts", "1",
-                output_file
-            ]
-            subprocess.run(split_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-        output_files.append(output_file)
-
-    return output_files
+    clip.close()
+    return split_files
