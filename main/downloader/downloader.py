@@ -11,6 +11,7 @@ from config import DOWNLOAD_LOCATION, ADMIN, TELEGRAPH_IMAGE_URL
 from main.utils import progress_message, humanbytes
 from main.downloader.ytdl_text import YTDL_WELCOME_TEXT
 from main.downloader.progress_hook import YTDLProgress
+from main.downloader.ytsplit import split_video
 import nest_asyncio
 
 nest_asyncio.apply()
@@ -155,22 +156,21 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Remove buttons and update caption to show downloading started
+    # Remove buttons and update caption
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.edit_caption(
         caption=f"📥 **Downloading Started...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-    # Initialize progress with YTDLProgress using the same message
+    # Progress system
     progress = YTDLProgress(
-        bot=bot, 
-        chat_id=query.message.chat.id, 
-        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**", 
+        bot=bot,
+        chat_id=query.message.chat.id,
+        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
         edit_msg=query.message
     )
-    
-    # Start the progress updater
+
     await progress.start_updater()
 
     ydl_opts = {
@@ -191,6 +191,7 @@ async def yt_callback_handler(bot, query):
             return info, ydl.prepare_filename(info)
 
     loop = asyncio.get_event_loop()
+
     try:
         info_dict, downloaded_path = await loop.run_in_executor(None, download_video)
     except Exception as e:
@@ -201,11 +202,10 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Stop the progress updater and delete the download progress message
     await progress.stop_updater()
     await query.message.delete()
 
-    # Process video info
+    # Video info
     try:
         final_size = os.path.getsize(downloaded_path)
         video = VideoFileClip(downloaded_path)
@@ -217,9 +217,10 @@ async def yt_callback_handler(bot, query):
         await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}")
         return
 
-    # Prepare and resize/crop thumbnail properly
+    # Thumbnail
     thumb_path = None
     thumb_url = info_dict.get('thumbnail', None)
+
     if thumb_url:
         resp = requests.get(thumb_url)
         if resp.status_code == 200:
@@ -232,17 +233,20 @@ async def yt_callback_handler(bot, query):
                     scale_factor = max(video_width / img_width, video_height / img_height)
                     new_size = (int(img_width * scale_factor), int(img_height * scale_factor))
                     img = img.resize(new_size, Image.LANCZOS)
+
                     left = (img.width - video_width) / 2
                     top = (img.height - video_height) / 2
                     right = (img.width + video_width) / 2
                     bottom = (img.height + video_height) / 2
+
                     img = img.crop((left, top, right, bottom))
                     img.save(thumb_path, "JPEG")
-            except Exception as e:
+            except:
                 thumb_path = None
 
-    # Send new message for upload with thumbnail
+    # Upload message
     upload_caption = f"🚀 **Uploading Started...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**"
+
     if thumb_path and os.path.exists(thumb_path):
         upload_msg = await bot.send_photo(
             query.message.chat.id,
@@ -257,19 +261,42 @@ async def yt_callback_handler(bot, query):
             parse_mode=enums.ParseMode.MARKDOWN
         )
 
-    # Upload video with progress
+    # 🔥 SPLIT LOGIC (AUTO)
+    split_files = await split_video(
+        bot,
+        query.message.chat.id,
+        downloaded_path,
+        info_dict['title'],
+        resolution,
+        thumb_path
+    )
+
+    # Upload single or multiple
     try:
-        await bot.send_video(
-            query.message.chat.id,
-            video=downloaded_path,
-            thumb=thumb_path,
-            caption=f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**",
-            duration=duration,
-            progress=progress_message,
-            progress_args=(f"**📤 Uploading...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**", upload_msg, time.time()),
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
+        for index, file in enumerate(split_files, start=1):
+
+            part_text = f" | Part {str(index).zfill(2)}" if len(split_files) > 1 else ""
+
+            await bot.send_video(
+                query.message.chat.id,
+                video=file,
+                thumb=thumb_path,
+                caption=(
+                    f"**🎞 {info_dict['title']}{part_text} | [🔗 URL]({url})**\n\n"
+                    f"🎥 **{resolution}** | 🗂 **{humanbytes(os.path.getsize(file))}**"
+                ),
+                duration=duration,
+                progress=progress_message,
+                progress_args=(
+                    f"**📤 Uploading...**\n\n🎞 **{info_dict['title']}{part_text}**\n\n📹 **{resolution}**",
+                    upload_msg,
+                    time.time()
+                ),
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+
         await upload_msg.delete()
+
     except Exception as e:
         await upload_msg.edit_caption(
             caption=f"❌ **Error during upload:** {str(e)}",
@@ -277,15 +304,21 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Cleanup files based on Colab toggle
+    # Cleanup
     current_state = store_colab_state.get(query.message.chat.id, False)
 
     if not current_state:
         if os.path.exists(downloaded_path):
             os.remove(downloaded_path)
+
+        # remove split parts
+        for file in split_files:
+            if os.path.exists(file):
+                os.remove(file)
+
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
-
+        
 # Description handler
 @Client.on_callback_query(filters.regex(r'^desc_https?://'))
 async def description_callback_handler(bot, query):
