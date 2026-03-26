@@ -16,10 +16,10 @@ YTDL_WELCOME_TEXT = """
 You can toggle the button below to decide where downloads are kept:
 
 ➡️ {store_button_text}
+"""
 
-━━━━━━━━━━━━━━━━━━━━━━━
 
-VID_TRIMMER_TEXT = 
+VID_TRIMMER_TEXT = """
          **Video Trimmer ✂**
 
     ✂ ━━━━━━❰ **Feautures** ❱━━━━━━➣
@@ -31,6 +31,7 @@ VID_TRIMMER_TEXT =
 ❤ **Thanks To K-MAC For His Great Trimming Code.\n**
 
 **📂 Please Send Your Video Or Document To Trim.**
+
    
 ━━━━━━━━━━━━━━━━━━━━━━━
 
