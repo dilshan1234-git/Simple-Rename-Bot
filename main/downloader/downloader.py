@@ -156,22 +156,19 @@ async def yt_callback_handler(bot, query):
     except:
         title = "Unknown Title"
 
-    # Remove buttons and update caption to show downloading started
     await query.message.edit_reply_markup(reply_markup=None)
     await query.message.edit_caption(
         caption=f"📥 **Downloading Started...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
         parse_mode=enums.ParseMode.MARKDOWN
     )
 
-    # Initialize progress with YTDLProgress using the same message
     progress = YTDLProgress(
-        bot=bot, 
-        chat_id=query.message.chat.id, 
-        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**", 
+        bot=bot,
+        chat_id=query.message.chat.id,
+        prefix_text=f"📥 **Downloading...**\n\n🎞 **{title}**\n\n📹 **{resolution}**",
         edit_msg=query.message
     )
-    
-    # Start the progress updater
+
     await progress.start_updater()
 
     ydl_opts = {
@@ -202,7 +199,6 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Stop the progress updater and delete the download progress message
     await progress.stop_updater()
     await query.message.delete()
 
@@ -218,7 +214,7 @@ async def yt_callback_handler(bot, query):
         await bot.send_message(query.message.chat.id, f"❌ **Error processing video:** {str(e)}")
         return
 
-    # Prepare and resize/crop thumbnail properly
+    # Thumbnail
     thumb_path = None
     thumb_url = info_dict.get('thumbnail', None)
     if thumb_url:
@@ -239,11 +235,96 @@ async def yt_callback_handler(bot, query):
                     bottom = (img.height + video_height) / 2
                     img = img.crop((left, top, right, bottom))
                     img.save(thumb_path, "JPEG")
-            except Exception as e:
+            except:
                 thumb_path = None
 
-    # Send new message for upload with thumbnail
+    # ================= SPLIT CHECK =================
+    if final_size > 2 * 1024 * 1024 * 1024:
+
+        split_caption = (
+            f"⚠️ **Video is larger than 2GB**\n\n"
+            f"✂️ **Starting to split...**\n\n"
+            f"🎞 **{info_dict['title']}**\n"
+            f"🗂 **{filesize}**\n\n"
+            f"⏳ Please wait..."
+        )
+
+        if thumb_path and os.path.exists(thumb_path):
+            split_msg = await bot.send_photo(
+                query.message.chat.id,
+                photo=thumb_path,
+                caption=split_caption,
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+        else:
+            split_msg = await bot.send_message(
+                query.message.chat.id,
+                split_caption,
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+
+        from main.downloader.ytsplit import split_video
+        split_folder = os.path.join(DOWNLOAD_LOCATION, "splitted")
+
+        parts = await loop.run_in_executor(None, split_video, downloaded_path, split_folder)
+
+        await split_msg.edit_caption(
+            caption=f"✅ **Splitting Completed**\n\n📦 **Total Parts:** {len(parts)}",
+            parse_mode=enums.ParseMode.MARKDOWN
+        )
+
+        await asyncio.sleep(2)
+        await split_msg.delete()
+
+        # Upload parts
+        for part in parts:
+            part_name = os.path.basename(part)
+            part_size = humanbytes(os.path.getsize(part))
+
+            if thumb_path and os.path.exists(thumb_path):
+                upload_msg = await bot.send_photo(
+                    query.message.chat.id,
+                    photo=thumb_path,
+                    caption=f"🚀 **Uploading...**\n\n🎞 **{part_name}**",
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+            else:
+                upload_msg = await bot.send_message(
+                    query.message.chat.id,
+                    f"🚀 **Uploading...**\n\n🎞 **{part_name}**",
+                    parse_mode=enums.ParseMode.MARKDOWN
+                )
+
+            await bot.send_video(
+                query.message.chat.id,
+                video=part,
+                thumb=thumb_path,
+                caption=f"**🎞 {part_name} | [🔗 URL]({url})**\n\n📦 **{part_size}**",
+                progress=progress_message,
+                progress_args=(f"📤 **Uploading {part_name}...**", upload_msg, time.time()),
+                parse_mode=enums.ParseMode.MARKDOWN
+            )
+
+            await upload_msg.delete()
+
+        # Cleanup
+        for part in parts:
+            if os.path.exists(part):
+                os.remove(part)
+
+        if not store_colab_state.get(query.message.chat.id, False):
+            if os.path.exists(downloaded_path):
+                os.remove(downloaded_path)
+
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
+
+        return
+    # ================= END SPLIT =================
+
+    # NORMAL UPLOAD
     upload_caption = f"🚀 **Uploading Started...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**"
+
     if thumb_path and os.path.exists(thumb_path):
         upload_msg = await bot.send_photo(
             query.message.chat.id,
@@ -258,7 +339,6 @@ async def yt_callback_handler(bot, query):
             parse_mode=enums.ParseMode.MARKDOWN
         )
 
-    # Upload video with progress
     try:
         await bot.send_video(
             query.message.chat.id,
@@ -267,7 +347,7 @@ async def yt_callback_handler(bot, query):
             caption=f"**🎞 {info_dict['title']} | [🔗 URL]({url})**\n\n🎥 **{resolution}** | 🗂 **{filesize}**",
             duration=duration,
             progress=progress_message,
-            progress_args=(f"**📤 Uploading...**\n\n🎞 **{info_dict['title']}**\n\n📹 **{resolution}**", upload_msg, time.time()),
+            progress_args=(f"📤 **Uploading...**", upload_msg, time.time()),
             parse_mode=enums.ParseMode.MARKDOWN
         )
         await upload_msg.delete()
@@ -278,12 +358,11 @@ async def yt_callback_handler(bot, query):
         )
         return
 
-    # Cleanup files based on Colab toggle
-    current_state = store_colab_state.get(query.message.chat.id, False)
-
-    if not current_state:
+    # Cleanup
+    if not store_colab_state.get(query.message.chat.id, False):
         if os.path.exists(downloaded_path):
             os.remove(downloaded_path)
+
     if thumb_path and os.path.exists(thumb_path):
         os.remove(thumb_path)
 
