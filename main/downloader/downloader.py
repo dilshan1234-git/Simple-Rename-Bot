@@ -300,6 +300,7 @@ async def yt_callback_handler(bot, query):
                 query.message.chat.id,
                 video=part,
                 thumb=thumb_path,
+                duration=duration,
                 caption=f"**🎞 {part_name} | [🔗 URL]({url})**\n\n📦 **{part_size}**",
                 progress=progress_message,
                 progress_args=(f"📤 **Uploading {part_name}...**", upload_msg, time.time()),
