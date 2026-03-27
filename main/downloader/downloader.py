@@ -26,25 +26,13 @@ async def ytdl(bot, msg):
     current_state = store_colab_state.get(chat_id, False)
     status_icon = "✅" if current_state else "❌"
     
-    # Colab store toggle button
     store_button = InlineKeyboardButton(
         f"Store on Colab : {status_icon}", callback_data="toggle_colab_store"
     )
     
-    # Upload splitted files button
-    split_upload_button = InlineKeyboardButton(
-        "📤 Upload Splitted Files", callback_data="upload_splitted"
-    )
+    caption_text = YTDL_WELCOME_TEXT.format(store_button_text=f"➡️ Store on Colab : {status_icon} (Click to toggle)")
     
-    # Arrange buttons in two rows
-    markup = InlineKeyboardMarkup([
-        [store_button],
-        [split_upload_button]
-    ])
-    
-    caption_text = YTDL_WELCOME_TEXT.format(
-        store_button_text=f"➡️ Store on Colab : {status_icon} (Click to toggle)"
-    )
+    markup = InlineKeyboardMarkup([[store_button]])
     
     await bot.send_photo(
         chat_id=chat_id,
@@ -345,68 +333,3 @@ async def toggle_store_colab(bot, query):
     
     await query.message.edit_reply_markup(markup)
     await query.answer(f"Store on Colab set to {'ON' if new_state else 'OFF'}")
-
-
-
-@Client.on_callback_query(filters.regex(r'^upload_splitted$'))
-async def upload_splitted_files(bot, query):
-    folder_path = "/content/Simple-Rename-Bot/splitted"
-
-    if not os.path.exists(folder_path):
-        await query.answer("❌ Folder not found!", show_alert=True)
-        return
-
-    files = sorted(os.listdir(folder_path))
-
-    if not files:
-        await query.answer("❌ No files found!", show_alert=True)
-        return
-
-    await query.message.edit_caption(
-        caption="📤 **Uploading Splitted Files...**",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
-
-    for file in files:
-        file_path = os.path.join(folder_path, file)
-
-        if not os.path.isfile(file_path):
-            continue
-
-        file_size = os.path.getsize(file_path)
-        size_text = humanbytes(file_size)
-
-        upload_msg = await bot.send_message(
-            query.message.chat.id,
-            f"🚀 **Uploading Started...**\n\n📦 **{file}**",
-            parse_mode=enums.ParseMode.MARKDOWN
-        )
-
-        try:
-            await bot.send_video(
-                query.message.chat.id,
-                video=file_path,
-                caption=f"📦 **{file}**\n\n🗂 **Size:** {size_text}",
-                progress=progress_message,
-                progress_args=(
-                    f"📤 **Uploading...**\n\n📦 **{file}**",
-                    upload_msg,
-                    time.time()
-                ),
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
-
-            await upload_msg.delete()
-
-        except Exception as e:
-            await upload_msg.edit_text(
-                f"❌ **Upload failed:** {str(e)}",
-                parse_mode=enums.ParseMode.MARKDOWN
-            )
-            return
-
-    await bot.send_message(
-        query.message.chat.id,
-        "✅ **All splitted files uploaded successfully!**",
-        parse_mode=enums.ParseMode.MARKDOWN
-    )
