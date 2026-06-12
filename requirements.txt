@@ -1,4 +1,4 @@
-pyrofork==2.3.69
+pyrofork
 Tgcrypto
 moviepy
 yt-dlp
