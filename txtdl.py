@@ -1,7 +1,9 @@
+import asyncio
 import time
 import os
 import re
 import zipfile
+import shutil
 
 import yt_dlp
 from pyrogram import Client, filters, enums
@@ -9,6 +11,29 @@ from pyrogram.types import Message
 
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
+
+
+# ─────────────────────────────────────────────
+# /backtxt  – move this file back to root
+# ─────────────────────────────────────────────
+@Client.on_message(filters.private & filters.command("backtxt") & filters.user(ADMIN))
+async def backtxt_command(bot: Client, msg: Message):
+    src  = "/content/Simple-Rename-Bot/main/txtdl.py"
+    dest = "/content/Simple-Rename-Bot/txtdl.py"
+
+    if not os.path.exists(src):
+        return await msg.reply_text(
+            f"❌ File not found at:\n`{src}`"
+        )
+
+    try:
+        shutil.move(src, dest)
+        await msg.reply_text(
+            f"✅ Moved successfully!\n\n"
+            f"`{src}`\n➡️ `{dest}`"
+        )
+    except Exception as e:
+        await msg.reply_text(f"❌ Move failed:\n`{e}`")
 
 
 # ─────────────────────────────────────────────
@@ -50,21 +75,12 @@ async def txtdl_command(bot: Client, msg: Message):
     await sts.edit(f"🎬 Found **{total} video(s)**. Starting downloads…")
 
     # ── Download loop ─────────────────────────
+    MAX_RETRIES = 5
     downloaded_files: list[str] = []
-    failed: list[str] = []
+    out_dir = os.path.join(DOWNLOAD_LOCATION, "txtdl_tmp")
+    os.makedirs(out_dir, exist_ok=True)
 
     for index, url in enumerate(urls, start=1):
-        # Tell the user which video is being fetched
-        try:
-            await sts.edit(
-                f"⬇️ Downloading **{index}/{total}**…\n"
-                f"`{url}`"
-            )
-        except Exception:
-            pass  # flood wait – just continue
-
-        out_dir = os.path.join(DOWNLOAD_LOCATION, "txtdl_tmp")
-        os.makedirs(out_dir, exist_ok=True)
 
         ydl_opts = {
             "format": (
@@ -81,40 +97,75 @@ async def txtdl_command(bot: Client, msg: Message):
             "no_warnings": False,
         }
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                # Resolve the actual filename yt-dlp wrote
-                fname = ydl.prepare_filename(info)
-                # yt-dlp may change extension after merge
-                for ext in (".mp4", ".mkv", ".webm"):
-                    candidate = os.path.splitext(fname)[0] + ext
-                    if os.path.exists(candidate):
-                        fname = candidate
-                        break
-                downloaded_files.append(fname)
-        except Exception as e:
-            print(f"[txtdl] ERROR on {url}: {e}")
-            failed.append(url)
+        fname = None
+        last_error = None
 
-    # ── Summary ───────────────────────────────
+        for attempt in range(1, MAX_RETRIES + 1):
+
+            # ── Status message ────────────────
+            status_line = (
+                f"⬇️ Downloading **{index}/{total}**…\n"
+                f"`{url}`"
+            )
+            if attempt > 1:
+                status_line += f"\n🔄 Retry **{attempt - 1}/{MAX_RETRIES - 1}**…"
+
+            try:
+                await sts.edit(status_line)
+            except Exception:
+                pass  # flood wait – just skip edit
+
+            # ── Attempt download ──────────────
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    candidate_base = ydl.prepare_filename(info)
+                    for ext in (".mp4", ".mkv", ".webm"):
+                        candidate = os.path.splitext(candidate_base)[0] + ext
+                        if os.path.exists(candidate):
+                            fname = candidate
+                            break
+                break  # success – exit retry loop
+
+            except Exception as e:
+                last_error = e
+                print(f"[txtdl] attempt {attempt}/{MAX_RETRIES} failed for {url}: {e}")
+
+                if attempt < MAX_RETRIES:
+                    await asyncio.sleep(3)   # brief pause before retry
+                # else: fall through to failure handling
+
+        # ── Outcome of this video ─────────────
+        if fname:
+            downloaded_files.append(fname)
+        else:
+            # All retries exhausted → cancel entire process
+            # Clean up whatever was downloaded so far
+            try:
+                for fp in downloaded_files:
+                    if os.path.exists(fp):
+                        os.remove(fp)
+                if os.path.isdir(out_dir) and not os.listdir(out_dir):
+                    os.rmdir(out_dir)
+            except Exception as ce:
+                print(f"[txtdl] cleanup error after cancel: {ce}")
+
+            return await sts.edit(
+                f"❌ **Cannot download this video** (failed after {MAX_RETRIES} retries):\n"
+                f"`{url}`\n\n"
+                f"⛔ **Process cancelled.**\n"
+                f"Already downloaded **{len(downloaded_files)}/{total}** video(s) have been removed.\n\n"
+                f"**Last error:**\n`{last_error}`"
+            )
+
+    # ── Summary (all videos done) ─────────────
     filenames_text = "\n".join(
         f"  ✅ {os.path.basename(p)}" for p in downloaded_files
     )
-    fail_text = (
-        ("\n\n❌ **Failed:**\n" + "\n".join(f"  • `{u}`" for u in failed))
-        if failed else ""
-    )
-
-    if not downloaded_files:
-        return await sts.edit(
-            f"❌ All downloads failed.{fail_text}"
-        )
 
     await sts.edit(
-        f"✅ **{len(downloaded_files)}/{total} videos downloaded!**\n\n"
-        f"{filenames_text}"
-        f"{fail_text}\n\n"
+        f"✅ **All {len(downloaded_files)}/{total} videos downloaded!**\n\n"
+        f"{filenames_text}\n\n"
         f"📦 Please send the **ZIP filename** (without .zip) to package & upload."
     )
 
