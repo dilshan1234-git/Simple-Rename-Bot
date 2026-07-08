@@ -148,12 +148,17 @@ async def txtdl_command(bot, msg):
     # ── All done ──────────────────────────────
     await _edit(sts, f"✅ **{len(downloaded_files)}/{total} videos downloaded!**")
 
-    # Send filenames in chunks of 50
-    chunk_size = 50
-    for i in range(0, len(downloaded_files), chunk_size):
-        chunk      = downloaded_files[i:i + chunk_size]
-        chunk_text = "\n".join(f"  ✅ {os.path.basename(p)}" for p in chunk)
-        await msg.reply_text(chunk_text)
+    # Send filenames split by character limit (Telegram max is 4096)
+    MAX_CHARS  = 3000  # safe margin below Telegram's 4096 limit
+    chunk_text = ""
+    for fp in downloaded_files:
+        line = f"  ✅ {os.path.basename(fp)}\n"
+        if len(chunk_text) + len(line) > MAX_CHARS:
+            await msg.reply_text(chunk_text.strip())
+            chunk_text = ""
+        chunk_text += line
+    if chunk_text:
+        await msg.reply_text(chunk_text.strip())
 
     await msg.reply_text(
         "📦 Please send the **ZIP filename** (without .zip) to package & upload."
