@@ -16,16 +16,13 @@ async def movetxt_command(bot: Client, msg: Message):
     dest = "/content/Simple-Rename-Bot/main/txtdl.py"
 
     if not os.path.exists(src):
-        return await msg.reply_text(
-            f"❌ File not found at:\n`{src}`"
-        )
+        return await msg.reply_text(f"❌ File not found at:\n`{src}`")
 
     try:
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         shutil.move(src, dest)
         await msg.reply_text(
-            f"✅ Moved successfully!\n\n"
-            f"`{src}`\n➡️ `{dest}`"
+            f"✅ Moved successfully!\n\n`{src}`\n➡️ `{dest}`"
         )
     except Exception as e:
         await msg.reply_text(f"❌ Move failed:\n`{e}`")
