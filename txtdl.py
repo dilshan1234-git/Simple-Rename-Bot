@@ -1,61 +1,37 @@
-from __future__ import annotations
-
-import asyncio
 import time
 import os
 import re
 import zipfile
-import shutil
-from typing import Dict, List, Optional
+import asyncio
 
 import yt_dlp
 from pyrogram import Client, filters
-from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from pyrogram.types import Message
 
 from config import DOWNLOAD_LOCATION, ADMIN
 from main.utils import progress_message, humanbytes
 
 
 # ─────────────────────────────────────────────
-# safe_edit  (same pattern as zip script)
+# State: track pending zip-name replies
 # ─────────────────────────────────────────────
-async def safe_edit(message: Message, new_text: str, **kwargs) -> Message:
-    if message is None:
-        return message
-    try:
-        current = message.text if getattr(message, "text", None) is not None else (message.caption or "")
-    except Exception:
-        current = ""
-    if str(current).strip() == str(new_text).strip():
-        return message
-    try:
-        return await message.edit_text(new_text, **kwargs)
-    except Exception:
-        try:
-            return await message.edit_text(new_text + "\u200b", **kwargs)
-        except Exception as e2:
-            print("safe_edit failed:", e2)
-            return message
-
-
-# ─────────────────────────────────────────────
-# State  (Python 3.8-safe typing)
-# ─────────────────────────────────────────────
-_txtdl_state: Dict[int, dict] = {}
+_pending_zip = {}   # user_id → list of downloaded file paths
 
 
 # ─────────────────────────────────────────────
 # /backtxt  – move this file back to root
 # ─────────────────────────────────────────────
+import shutil
+
 @Client.on_message(filters.private & filters.command("backtxt") & filters.user(ADMIN))
-async def backtxt_command(bot: Client, msg: Message):
+async def backtxt_command(bot, msg):
     src  = "/content/Simple-Rename-Bot/main/txtdl.py"
     dest = "/content/Simple-Rename-Bot/txtdl.py"
     if not os.path.exists(src):
         return await msg.reply_text(f"❌ File not found at:\n`{src}`")
     try:
         shutil.move(src, dest)
-        await msg.reply_text(f"✅ Moved successfully!\n\n`{src}`\n➡️ `{dest}`")
+        await msg.reply_text(f"✅ Moved!\n\n`{src}`\n➡️ `{dest}`")
     except Exception as e:
         await msg.reply_text(f"❌ Move failed:\n`{e}`")
 
@@ -64,7 +40,7 @@ async def backtxt_command(bot: Client, msg: Message):
 # /txtdl  – reply to a .txt file
 # ─────────────────────────────────────────────
 @Client.on_message(filters.private & filters.command("txtdl") & filters.user(ADMIN))
-async def txtdl_command(bot: Client, msg: Message):
+async def txtdl_command(bot, msg):
     reply = msg.reply_to_message
     if not reply or not reply.document:
         return await msg.reply_text("❌ Please reply to a **.txt** file with /txtdl")
@@ -82,13 +58,14 @@ async def txtdl_command(bot: Client, msg: Message):
 
     urls = re.findall(r"url\s*-\s*'([^']+)'", content)
     if not urls:
-        return await safe_edit(sts, "❌ No URLs found in the TXT file.\nExpected format: `url - 'https://...'`")
+        return await sts.edit("❌ No URLs found in the TXT file.\nExpected format: `url - 'https://...'`")
 
     total = len(urls)
-    await safe_edit(sts, f"🎬 Found **{total} video(s)**. Starting downloads…")
+    await sts.edit(f"🎬 Found **{total} video(s)**. Starting downloads…")
 
-    MAX_RETRIES   = 5
-    downloaded_files: List[str] = []
+    # ── Download loop ─────────────────────────
+    MAX_RETRIES = 5
+    downloaded_files = []
     out_dir = os.path.join(DOWNLOAD_LOCATION, "txtdl_tmp")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -109,18 +86,21 @@ async def txtdl_command(bot: Client, msg: Message):
             "no_warnings": False,
         }
 
-        fname: Optional[str] = None
+        fname = None
         last_error = None
 
         for attempt in range(1, MAX_RETRIES + 1):
             status_line = f"⬇️ Downloading **{index}/{total}**…\n`{url}`"
             if attempt > 1:
                 status_line += f"\n🔄 Retry **{attempt - 1}/{MAX_RETRIES - 1}**…"
-            await safe_edit(sts, status_line)
+            try:
+                await sts.edit(status_line)
+            except Exception:
+                pass
 
             try:
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info           = ydl.extract_info(url, download=True)
+                    info = ydl.extract_info(url, download=True)
                     candidate_base = ydl.prepare_filename(info)
                     for ext in (".mp4", ".mkv", ".webm"):
                         candidate = os.path.splitext(candidate_base)[0] + ext
@@ -138,6 +118,7 @@ async def txtdl_command(bot: Client, msg: Message):
         if fname:
             downloaded_files.append(fname)
         else:
+            # All retries exhausted → cancel
             for fp in downloaded_files:
                 try:
                     os.remove(fp)
@@ -148,8 +129,7 @@ async def txtdl_command(bot: Client, msg: Message):
                     os.rmdir(out_dir)
             except Exception:
                 pass
-            return await safe_edit(
-                sts,
+            return await sts.edit(
                 f"❌ **Cannot download this video** (failed after {MAX_RETRIES} retries):\n"
                 f"`{url}`\n\n"
                 f"⛔ **Process cancelled.**\n"
@@ -160,82 +140,36 @@ async def txtdl_command(bot: Client, msg: Message):
     # ── All done ──────────────────────────────
     filenames_text = "\n".join(f"  ✅ {os.path.basename(p)}" for p in downloaded_files)
 
-    _txtdl_state[msg.from_user.id] = {
-        "downloaded_files": downloaded_files,
-        "awaiting_zip_name": False,
-        "sts": sts,
-    }
-
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📦 Create ZIP", callback_data="txtdl_create_zip")],
-        [InlineKeyboardButton("❌ Cancel",      callback_data="txtdl_cancel")],
-    ])
-
-    await safe_edit(
-        sts,
-        f"✅ **All {len(downloaded_files)}/{total} videos downloaded!**\n\n"
+    await sts.edit(
+        f"✅ **{len(downloaded_files)}/{total} videos downloaded!**\n\n"
         f"{filenames_text}\n\n"
-        f"Press **Create ZIP** then send the ZIP filename.",
-        reply_markup=keyboard,
+        f"📦 Please send the **ZIP filename** (without .zip) to package & upload."
     )
 
-
-# ─────────────────────────────────────────────
-# Callback: Create ZIP button
-# ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^txtdl_create_zip$"))
-async def txtdl_create_zip_cb(bot: Client, query: CallbackQuery):
-    user_id = query.from_user.id
-    if user_id not in _txtdl_state:
-        return await query.answer("Session expired. Run /txtdl again.", show_alert=True)
-    _txtdl_state[user_id]["awaiting_zip_name"] = True
-    await safe_edit(query.message, "🔤 **Please send the ZIP filename** (without .zip).")
-    await query.answer()
+    _pending_zip[msg.from_user.id] = downloaded_files
 
 
 # ─────────────────────────────────────────────
-# Callback: Cancel button
+# Catch the zip-name reply
 # ─────────────────────────────────────────────
-@Client.on_callback_query(filters.regex("^txtdl_cancel$"))
-async def txtdl_cancel_cb(bot: Client, query: CallbackQuery):
-    user_id = query.from_user.id
-    state   = _txtdl_state.pop(user_id, {})
-    for fp in state.get("downloaded_files", []):
-        try:
-            os.remove(fp)
-        except Exception:
-            pass
-    await safe_edit(query.message, "❌ **Cancelled.** Downloaded files have been removed.")
-    await query.answer()
-
-
-# ─────────────────────────────────────────────
-# Text handler: ZIP name
-# group=1 so it runs AFTER group=0 handlers
-# (prevents conflict with zip script's text handler)
-# ─────────────────────────────────────────────
-@Client.on_message(filters.private & filters.text & filters.user(ADMIN), group=1)
-async def txtdl_zip_name(bot: Client, msg: Message):
+@Client.on_message(filters.private & filters.text & filters.user(ADMIN))
+async def txtdl_zip_name(bot, msg):
     user_id = msg.from_user.id
-    state   = _txtdl_state.get(user_id)
-
-    if not state or not state.get("awaiting_zip_name"):
+    if user_id not in _pending_zip:
         return
+
     if msg.text.startswith("/"):
         return
 
     zip_name = msg.text.strip().replace(" ", "_")
     if not zip_name:
-        return await msg.reply_text("❌ Invalid name. Please send a plain filename.")
+        return await msg.reply_text("❌ Invalid name. Send a plain filename (no spaces, no extension).")
 
-    state["awaiting_zip_name"] = False
+    downloaded_files = _pending_zip.pop(user_id)
+    zip_filename = f"{zip_name}.zip"
+    zip_path = os.path.join(DOWNLOAD_LOCATION, zip_filename)
 
-    downloaded_files = state["downloaded_files"]
-    sts              = state["sts"]
-    zip_filename     = f"{zip_name}.zip"
-    zip_path         = os.path.join(DOWNLOAD_LOCATION, zip_filename)
-
-    await safe_edit(sts, f"📦 Creating **{zip_filename}**…")
+    sts = await msg.reply_text(f"📦 Creating **{zip_filename}**…")
 
     try:
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -243,13 +177,11 @@ async def txtdl_zip_name(bot: Client, msg: Message):
                 if os.path.exists(fp):
                     zf.write(fp, os.path.basename(fp))
     except Exception as e:
-        _txtdl_state.pop(user_id, None)
-        return await safe_edit(sts, f"❌ ZIP creation failed:\n`{e}`")
+        return await sts.edit(f"❌ ZIP creation failed:\n`{e}`")
 
     zip_size = humanbytes(os.path.getsize(zip_path))
 
-    await safe_edit(
-        sts,
+    await sts.edit(
         f"🚀 Uploading started….. 📤 Thanks To All Who Supported ❤\n"
         f"📦 **{zip_filename}** | 💽 {zip_size}"
     )
@@ -266,31 +198,23 @@ async def txtdl_zip_name(bot: Client, msg: Message):
             ),
             progress=progress_message,
             progress_args=(
-                f"📤 Uploading ZIP…\n\n**📦 {zip_filename}**",
+                "Upload Started….. Thanks To All Who Supported ❤",
                 sts,
                 c_time,
             ),
         )
     except Exception as e:
-        _txtdl_state.pop(user_id, None)
-        return await safe_edit(sts, f"❌ Upload failed:\n`{e}`")
-
-    _txtdl_state.pop(user_id, None)
+        return await sts.edit(f"❌ Upload failed:\n`{e}`")
 
     try:
         os.remove(zip_path)
-    except Exception:
-        pass
-    for fp in downloaded_files:
-        try:
-            os.remove(fp)
-        except Exception:
-            pass
-    try:
+        for fp in downloaded_files:
+            if os.path.exists(fp):
+                os.remove(fp)
         tmp_dir = os.path.join(DOWNLOAD_LOCATION, "txtdl_tmp")
         if os.path.isdir(tmp_dir) and not os.listdir(tmp_dir):
             os.rmdir(tmp_dir)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[txtdl] cleanup error: {e}")
 
     await sts.delete()
