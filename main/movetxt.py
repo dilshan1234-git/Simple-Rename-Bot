@@ -16,7 +16,7 @@ from config import ADMIN
 @Client.on_message(filters.private & filters.command("movetxt") & filters.user(ADMIN))
 async def movetxt_command(bot: Client, msg: Message):
     src  = "/content/Simple-Rename-Bot/txtdl.py"
-    dest = "/content/Simple-Rename-Bot/main/txtdl.py"
+    dest = "/content/Simple-Rename-Bot/main/downloader/txtdl.py"
 
     if not os.path.exists(src):
         return await msg.reply_text(f"❌ File not found at:\n`{src}`")
