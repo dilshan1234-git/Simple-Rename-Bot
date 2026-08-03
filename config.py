@@ -4,7 +4,7 @@ API_ID = int(environ.get("API_ID", "14631157"))
 API_HASH = environ.get("API_HASH", "aa7c2b3be68a7488abdb9de6ce78d311")
 BOT_TOKEN = environ.get(
     "BOT_TOKEN",
-    "7662948776:AAFjrEWZ2qkEVFSCd9-Iez9arAiEc6HTDGk")
+    "7662948776:AAGu_vIuk89zmRdCc_96pH8wJR_bxcD_Zck")
 TG_MAX_FILE_SIZE = 2097152000  # 2GB for Telegram
 CHUNK_SIZE = 1024 * 1024  # 1MB
 PROCESS_MAX_TIMEOUT = 300  # 5 minutes
