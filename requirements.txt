@@ -12,3 +12,4 @@ aiotelegraph
 ffmpeg-python
 mega.py
 instaloader
+faster-whisper
