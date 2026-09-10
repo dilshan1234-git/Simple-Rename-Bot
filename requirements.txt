@@ -7,7 +7,7 @@ pillow
 youtube-dl
 ffmpeg
 telegraph
-pymediainfo
+pymediainfo==7.0.1
 aiotelegraph
 ffmpeg-python
 mega.py
