@@ -1,4 +1,5 @@
 
+
 import os
 import time
 import asyncio
@@ -58,6 +59,7 @@ async def youtube_link_handler(bot, msg):
         'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
         'retries': 10,
         'fragment_retries': 10,
+        'js_runtimes': {'deno': '/root/.deno/bin/deno'},
     }
 
     try:
@@ -182,6 +184,8 @@ async def yt_callback_handler(bot, query):
         'no_warnings': True,
         'retries': 10,
         'fragment_retries': 10,
+        'js_runtimes': {'deno': '/root/.deno/bin/deno'},
+
     }
 
     def download_video():
