@@ -1,6 +1,6 @@
 pyrofork==2.2.11
 Tgcrypto
-moviepy
+moviepy==1.0.3
 yt-dlp
 pytube
 pillow
