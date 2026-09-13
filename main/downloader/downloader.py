@@ -64,6 +64,7 @@ async def youtube_link_handler(bot, msg):
                 'path': '/root/.deno/bin/deno'
             }
         }
+    }        
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -192,8 +193,8 @@ async def yt_callback_handler(bot, query):
                 'path': '/root/.deno/bin/deno'
             }
         }
-
-
+    }
+    
     def download_video():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
