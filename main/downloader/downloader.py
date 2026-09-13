@@ -59,8 +59,11 @@ async def youtube_link_handler(bot, msg):
         'cookiefile': os.path.join(DOWNLOAD_LOCATION, 'cookies.txt') if os.path.exists(os.path.join(DOWNLOAD_LOCATION, 'cookies.txt')) else None,
         'retries': 10,
         'fragment_retries': 10,
-        'js_runtimes': {'deno': '/root/.deno/bin/deno'},
-    }
+        'js_runtimes': {
+            'deno': {
+                'path': '/root/.deno/bin/deno'
+            }
+        },
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -184,9 +187,12 @@ async def yt_callback_handler(bot, query):
         'no_warnings': True,
         'retries': 10,
         'fragment_retries': 10,
-        'js_runtimes': {'deno': '/root/.deno/bin/deno'},
+        'js_runtimes': {
+            'deno': {
+                'path': '/root/.deno/bin/deno'
+            }
+        },
 
-    }
 
     def download_video():
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
