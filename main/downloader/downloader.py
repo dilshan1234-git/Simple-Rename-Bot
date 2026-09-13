@@ -63,7 +63,7 @@ async def youtube_link_handler(bot, msg):
             'deno': {
                 'path': '/root/.deno/bin/deno'
             }
-        },
+        }
 
     try:
         with youtube_dl.YoutubeDL(ydl_opts) as ydl:
@@ -191,7 +191,7 @@ async def yt_callback_handler(bot, query):
             'deno': {
                 'path': '/root/.deno/bin/deno'
             }
-        },
+        }
 
 
     def download_video():
