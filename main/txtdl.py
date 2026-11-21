@@ -106,14 +106,20 @@ async def txtdl_command(bot, msg):
             await _edit(sts, status_line)
 
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info           = ydl.extract_info(url, download=True)
-                    candidate_base = ydl.prepare_filename(info)
-                    for ext in (".mp4", ".mkv", ".webm"):
-                        candidate = os.path.splitext(candidate_base)[0] + ext
-                        if os.path.exists(candidate):
-                            fname = candidate
-                            break
+                def _download(url=url, opts=ydl_opts):
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        return ydl.prepare_filename(info)
+
+                # blocking call -> thread, so the bot stays responsive
+                candidate_base = await asyncio.get_running_loop().run_in_executor(None, _download)
+                for ext in (".mp4", ".mkv", ".webm"):
+                    candidate = os.path.splitext(candidate_base)[0] + ext
+                    if os.path.exists(candidate):
+                        fname = candidate
+                        break
+                if fname is None:
+                    raise FileNotFoundError(f"Downloaded file not found: {candidate_base}")
                 break  # success
 
             except Exception as e:
@@ -173,11 +179,11 @@ async def txtdl_command(bot, msg):
 @Client.on_message(filters.private & filters.text & filters.user(ADMIN))
 async def txtdl_zip_name(bot, msg):
     user_id = msg.from_user.id
-    if user_id not in _pending_zip:
-        return
-
-    if msg.text.startswith("/"):
-        return
+    # Not waiting for a zip name (or it's a command) -> let other handlers run.
+    # A plain `return` here would CONSUME the update and block every other
+    # text handler/command that loads after this file.
+    if user_id not in _pending_zip or msg.text.startswith("/"):
+        msg.continue_propagation()
 
     zip_name = msg.text.strip().replace(" ", "_")
     if not zip_name:
@@ -189,11 +195,15 @@ async def txtdl_zip_name(bot, msg):
 
     sts = await msg.reply_text(f"📦 Creating **{zip_filename}**…")
 
-    try:
-        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+    def _make_zip():
+        # videos are already compressed -> STORED is much faster
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as zf:
             for fp in downloaded_files:
                 if os.path.exists(fp):
                     zf.write(fp, os.path.basename(fp))
+
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _make_zip)
     except Exception as e:
         await _edit(sts, f"❌ ZIP creation failed:\n`{e}`")
         return
